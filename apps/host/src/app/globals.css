@@ -1,0 +1,24 @@
+@import "tailwindcss";
+@config "../../tailwind.config.js";
+
+/**
+ * Tela host/TV do JAMROOM: dark sempre, legibilidade a distância
+ * (docs/produto-descritivo-telas.md — "fontes grandes, alto contraste").
+ */
+:root {
+  --background: #09090b;
+  --foreground: #ffffff;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-plus-jakarta-sans);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  overflow: hidden; /* a TV é um palco: sem scroll */
+}

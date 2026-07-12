@@ -1,0 +1,134 @@
+"use client";
+
+import type { Jam, LivePitch, Song } from "@jamroom/shared-types";
+
+/**
+ * Player — música em andamento. "A TV é um palco": letra protagonista,
+ * fontes enormes, poucos elementos (docs/layoutDesc_extracted.txt).
+ */
+export function PlayerView({
+  jam,
+  song,
+  time,
+  pitch,
+  songsById,
+}: {
+  jam: Jam;
+  song: Song;
+  time: number;
+  pitch: LivePitch | null;
+  songsById: Map<string, Song>;
+}) {
+  const item = jam.queue.find((i) => i.id === jam.currentItemId);
+  const singer = jam.participants.find((p) => p.id === item?.participantId);
+
+  const currentIdx = song.lines.findIndex((l) => time >= l.start && time < l.end);
+  const upcomingIdx = song.lines.findIndex((l) => l.start > time);
+  const activeIdx = currentIdx >= 0 ? currentIdx : -1;
+  const current = activeIdx >= 0 ? song.lines[activeIdx] : null;
+  const next =
+    activeIdx >= 0 ? song.lines[activeIdx + 1] : upcomingIdx >= 0 ? song.lines[upcomingIdx] : null;
+
+  const firstLineStart = song.lines[0]?.start ?? 0;
+  const leadCountdown = time < firstLineStart ? Math.ceil(firstLineStart - time) : null;
+
+  const queued = jam.queue.filter((i) => i.status === "queued");
+  const nextItem = queued[0];
+  const nextSong = nextItem ? songsById.get(nextItem.songId) : undefined;
+
+  const progress = Math.min(1, Math.max(0, time / song.durationSec));
+  const remaining = Math.max(0, Math.round(song.durationSec - time));
+
+  // barra de afinação: desloca o marcador conforme a distância em semitons
+  const offset = pitch?.centsOff ?? null;
+  const markerPos = offset === null ? null : Math.max(-1, Math.min(1, offset / 3));
+
+  return (
+    <main
+      className="relative flex h-full flex-col"
+      style={{
+        background:
+          "radial-gradient(120% 90% at 75% 10%, rgba(124,58,237,0.4), transparent 55%), radial-gradient(90% 70% at 20% 100%, rgba(59,130,246,0.25), transparent 60%), #09090B",
+      }}
+    >
+      {/* cantor atual */}
+      <header className="flex items-start justify-between p-12">
+        <div>
+          <p className="text-title font-bold">{singer?.name ?? "—"}</p>
+          <p className="mt-1 text-subtitle text-foreground-muted">cantando agora</p>
+        </div>
+        <div className="text-right">
+          <p className="text-subtitle font-semibold">{song.title}</p>
+          <p className="mt-1 text-body text-foreground-muted">{song.artist}</p>
+        </div>
+      </header>
+
+      {/* letra protagonista */}
+      <section className="flex flex-1 flex-col items-center justify-center gap-8 px-16 text-center">
+        {leadCountdown !== null ? (
+          <p className="text-[8rem] font-extrabold text-primary">{leadCountdown}</p>
+        ) : (
+          <>
+            <p
+              className={
+                current
+                  ? "bg-gradient-to-r from-primary to-secondary bg-clip-text text-6xl font-extrabold leading-tight text-transparent"
+                  : "text-6xl font-extrabold leading-tight text-foreground-muted/50"
+              }
+            >
+              {current?.text ?? next?.text ?? "♪"}
+            </p>
+            {current && next && (
+              <p className="text-4xl font-bold text-foreground-muted/50">{next.text}</p>
+            )}
+          </>
+        )}
+
+        {/* barra de afinação ao vivo */}
+        <div className="mt-8 w-[420px]">
+          <div className="relative h-3 rounded-full bg-surface-elevated">
+            <div className="absolute left-1/2 top-1/2 h-6 w-1 -translate-x-1/2 -translate-y-1/2 rounded bg-border" />
+            {markerPos !== null && (
+              <div
+                className={`absolute top-1/2 h-8 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full transition-all duration-150 ${
+                  pitch?.hit ? "bg-success" : "bg-warning"
+                }`}
+                style={{ left: `${50 + markerPos * 45}%` }}
+              />
+            )}
+          </div>
+          <p className="mt-2 text-caption font-semibold uppercase tracking-wider text-foreground-muted">
+            {markerPos === null ? "aguardando voz..." : pitch?.hit ? "afinado!" : "ajuste o tom"}
+          </p>
+        </div>
+      </section>
+
+      {/* barra inferior: progresso, próxima e código */}
+      <footer className="border-t border-white/10 bg-background/70 px-12 py-6 backdrop-blur-glass">
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-elevated">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-primary to-secondary"
+            style={{ width: `${progress * 100}%` }}
+          />
+        </div>
+        <div className="mt-4 flex items-center justify-between">
+          <p className="text-body text-foreground-muted">
+            {nextSong ? (
+              <>
+                Próxima: <span className="font-semibold text-foreground">{nextSong.title}</span>
+                {" · "}
+                {jam.participants.find((p) => p.id === nextItem?.participantId)?.name}
+              </>
+            ) : (
+              "Fila vazia — adicionem a próxima pelo celular!"
+            )}
+          </p>
+          <p className="text-body text-foreground-muted">
+            {Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, "0")} restantes ·
+            Jam <span className="font-bold tracking-widest text-foreground">{jam.code}</span>
+          </p>
+        </div>
+      </footer>
+    </main>
+  );
+}

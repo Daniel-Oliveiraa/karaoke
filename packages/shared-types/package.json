@@ -1,0 +1,12 @@
+{
+  "name": "@jamroom/shared-types",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Contratos compartilhados do JAMROOM (Song, Jam, QueueItem, PitchCurve, ScoreResult e eventos de socket).",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "devDependencies": {
+    "@jamroom/config": "*",
+    "typescript": "^5"
+  }
+}

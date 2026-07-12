@@ -1,0 +1,5 @@
+demucs>=4.0
+librosa>=0.10
+faster-whisper>=1.0
+soundfile>=0.12
+numpy

@@ -1,0 +1,14 @@
+{
+  "name": "jamroom",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace=web",
+    "dev:api": "npm run dev --workspace=api",
+    "dev:host": "npm run dev --workspace=host",
+    "dev:participant": "npm run dev --workspace=participant"
+  }
+}

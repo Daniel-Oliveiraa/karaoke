@@ -1,0 +1,19 @@
+# dependências e builds
+node_modules/
+.next/
+*.tsbuildinfo
+next-env.d.ts
+
+# áudio (grande e/ou licenciado — regenerável via services/audio-processing)
+apps/api/media/
+services/audio-processing/input/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# ambiente e editor
+.env*
+.DS_Store
+Thumbs.db

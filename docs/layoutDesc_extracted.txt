@@ -1,0 +1,429 @@
+
+    
+    JAMROOM — Design System e Guia de Interface
+    
+    Objetivo
+    Desenvolver uma aplicação SaaS moderna com aparência premium, inspirada nos melhores produtos atuais como Spotify, Linear, Discord, Notion, Vercel e Apple TV.
+    O usuário deve sentir que está utilizando um produto tecnológico de alto nível, e não um software tradicional de karaokê.
+    A identidade visual deve transmitir:
+    diversão
+    tecnologia
+    simplicidade
+    colaboração
+    música
+    performance
+    elegância
+    Todo o sistema deve utilizar o mesmo Design System, independentemente da tela (Landing Page, Dashboard, Admin, TV Host ou Mobile).
+    
+    
+    
+    
+    Conceito Visual
+    A experiência gira em torno do conceito de “Jam”.
+    Não é apenas um karaokê.
+    É uma sessão musical colaborativa.
+    A interface deve lembrar mais um serviço de streaming do que um software de gestão.
+    Evitar:
+    excesso de neon
+    gradientes exagerados
+    visual arcade
+    aparência “anos 2000”
+    Preferir:
+    superfícies limpas
+    muito espaço em branco (dark)
+    animações suaves
+    poucos elementos por tela
+    foco no conteúdo principal
+    
+    
+    
+    Paleta de cores
+    
+    Background principal
+    #09090B
+    
+    
+    
+    Background secundário
+    #121216
+    
+    
+    
+    Cards
+    #18181B
+    
+    
+    
+    Bordas
+    #2A2A32
+    
+    
+    
+    Texto principal
+    #FFFFFF
+    
+    
+    
+    Texto secundário
+    #B3B3BC
+    
+    
+    
+    Cor Primária
+    #7C3AED
+    (roxo moderno)
+    Utilizar para:
+    botões principais
+    links
+    indicadores ativos
+    foco
+    
+    
+    
+    Cor Secundária
+    #3B82F6
+    Utilizar apenas em detalhes.
+    
+    
+    
+    Sucesso
+    #22C55E
+    
+    
+    
+    Aviso
+    #FACC15
+    
+    
+    
+    Erro
+    #EF4444
+    
+    
+    
+    
+    Tipografia
+    Utilizar apenas uma fonte.
+    Preferencialmente:
+    Inter
+    Manrope
+    Plus Jakarta Sans
+    Jamais utilizar fontes decorativas.
+    Hierarquia:
+    Hero
+    72~80px
+    Título
+    40px
+    Subtítulo
+    24px
+    Texto
+    16px
+    Legenda
+    14px
+    
+    
+    
+    Bordas
+    Todos os componentes seguem o mesmo padrão.
+    Radius:
+    16px
+    Cards grandes:
+    20px
+    Botões:
+    16px
+    Inputs:
+    14px
+    Nunca utilizar cantos retos.
+    
+    
+    
+    Sombras
+    Sombras suaves.
+    Exemplo:
+    0 10px 30px rgba(0,0,0,.25)
+    Evitar sombras pesadas.
+    
+    
+    
+    Glassmorphism
+    Pode ser utilizado em:
+    modais
+    overlays
+    player
+    leaderboard
+    Blur pequeno.
+    Nunca exagerado.
+    
+    
+    
+    Espaçamento
+    Utilizar grid de 8px.
+    Espaçamentos comuns:
+    8
+    16
+    24
+    32
+    48
+    64
+    96
+    Nunca posicionar elementos muito próximos.
+    A interface deve “respirar”.
+    
+    
+    
+    Ícones
+    Biblioteca:
+    Lucide
+    ou HeroIcons.
+    Todos com traço fino.
+    Nunca utilizar ícones coloridos.
+    
+    
+    
+    Botões
+    Existem apenas quatro tipos.
+    
+    Primary
+    Fundo roxo
+    Texto branco
+    Hover:
+    levemente mais claro
+    
+    
+    
+    Secondary
+    Fundo transparente
+    Borda cinza
+    Hover:
+    background sutil
+    
+    
+    
+    Ghost
+    Sem borda
+    Sem fundo
+    Apenas texto
+    
+    
+    
+    Danger
+    Vermelho
+    Usado somente para ações destrutivas.
+    
+    
+    
+    
+    Inputs
+    Inputs grandes.
+    Altura mínima:
+    48px
+    Placeholder discreto.
+    Label acima.
+    Mensagens de erro abaixo.
+    
+    
+    
+    Cards
+    Todos os cards possuem:
+    Background
+    #18181B
+    Radius
+    20px
+    Padding
+    24px
+    Borda discreta.
+    
+    
+    
+    Sidebar
+    A sidebar deve lembrar Linear ou Discord.
+    Logo no topo.
+    Depois:
+    Dashboard
+    Jams
+    Histórico
+    Créditos
+    Configurações
+    Perfil
+    Na parte inferior:
+    Avatar
+    Nome
+    Plano
+    
+    
+    
+    Landing Page
+    A Landing possui apenas um objetivo:
+    Converter visitantes.
+    Estrutura:
+    Hero
+    ↓
+    Como funciona
+    ↓
+    Benefícios
+    ↓
+    Demonstração
+    ↓
+    Planos
+    ↓
+    Perguntas Frequentes
+    ↓
+    Footer
+    O Hero ocupa praticamente uma tela inteira.
+    À esquerda:
+    Headline
+    Subheadline
+    Botões
+    À direita:
+    Mockup da TV
+    Mockup do celular
+    Ranking
+    QR Code
+    Tudo integrado em uma única composição.
+    
+    
+    
+    Dashboard do Anfitrião
+    Inspirado em:
+    Spotify Desktop
+    Notion
+    Linear
+    Layout:
+    Sidebar fixa
+    Header
+    Cards
+    Listas
+    A primeira ação da tela sempre será:
+    Criar Jam
+    Esse botão deve ser o maior da tela.
+    
+    
+    
+    Tela da Jam
+    É a tela mais importante do sistema.
+    O foco deve ser:
+    QR Code
+    Código
+    Fila
+    Participantes
+    Tudo extremamente limpo.
+    Evitar excesso de informações.
+    
+    
+    
+    Tela da TV
+    Pensar como um aplicativo para Smart TV.
+    Poucos elementos.
+    Fontes enormes.
+    Muito contraste.
+    O vídeo ocupa quase toda a tela.
+    A letra deve ser a protagonista.
+    Elementos laterais:
+    Cantor atual
+    Próxima música
+    Tempo restante
+    QR Code (quando necessário)
+    Nunca transformar a TV em um dashboard.
+    Ela é um palco.
+    
+    
+    
+    Mobile
+    Inspirado em Spotify.
+    O usuário deve conseguir:
+    Entrar
+    ↓
+    Escolher nome
+    ↓
+    Adicionar música
+    em menos de 30 segundos.
+    Poucos botões.
+    Botão principal sempre fixo.
+    As listas utilizam cards grandes.
+    
+    
+    
+    Admin
+    Inspirado em:
+    Linear
+    GitHub
+    Vercel
+    Muito mais denso.
+    Tabelas.
+    Filtros.
+    Indicadores.
+    Gráficos simples.
+    Nenhum efeito desnecessário.
+    
+    
+    
+    Componentes
+    Todos os componentes devem ser reutilizáveis.
+    Criar componentes para:
+    Button
+    Input
+    Card
+    Avatar
+    Leaderboard
+    Music Card
+    Queue Card
+    Modal
+    Toast
+    Dialog
+    Badge
+    Progress
+    Empty State
+    Skeleton
+    Navbar
+    Sidebar
+    Table
+    QRCode
+    Music Player
+    Lyrics Viewer
+    Score Card
+    
+    
+    
+    Microinterações
+    Toda interação deve possuir feedback.
+    Hover
+    Press
+    Loading
+    Success
+    Error
+    Transition
+    Utilizar animações suaves.
+    200ms a 300ms.
+    Nunca utilizar animações chamativas.
+    
+    
+    
+    Ilustrações
+    Utilizar fotografias escuras com iluminação de palco.
+    Predominância de:
+    Roxo
+    Azul
+    Magenta
+    As imagens nunca devem competir com o conteúdo.
+    
+    
+    
+    Experiência
+    O usuário deve sentir que:
+    montar uma Jam leva menos de um minuto;
+    convidar pessoas é extremamente simples;
+    cantar é divertido;
+    acompanhar o ranking é emocionante;
+    o produto é sofisticado, moderno e confiável.
+    Todas as telas devem seguir exatamente esta identidade visual, reutilizando os mesmos componentes, cores, espaçamentos, tipografia e princípios de UX. Qualquer nova funcionalidade adicionada ao sistema deve ser construída utilizando esse Design System, garantindo consistência visual e uma experiência uniforme em toda a plataforma.
+    
+    
+      
+        
+                
+        
+        
+              
+      
+    
+  
