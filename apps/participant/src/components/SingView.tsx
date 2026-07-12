@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Button } from "@jamroom/ui";
+import { Button, PitchMeter, ProgressBar } from "@jamroom/ui";
 import type { Jam, Participant, Song } from "@jamroom/shared-types";
 import { startPitchCapture, type PitchCapture } from "@/lib/pitchDetector";
 import { ScoreTracker, type FrameJudgement } from "@/lib/scoring";
@@ -124,8 +124,6 @@ export function SingView({
     null;
 
   const progress = Math.min(1, Math.max(0, time / song.durationSec));
-  const markerPos =
-    judge?.centsOff == null ? null : Math.max(-1, Math.min(1, judge.centsOff / 3));
 
   if (done) {
     return (
@@ -177,26 +175,13 @@ export function SingView({
             </p>
 
             {/* barra de afinação */}
-            <div className="w-full max-w-xs">
-              <div className="relative h-3 rounded-full bg-surface-elevated">
-                <div className="absolute left-1/2 top-1/2 h-6 w-1 -translate-x-1/2 -translate-y-1/2 rounded bg-border" />
-                {markerPos !== null && (
-                  <div
-                    className={`absolute top-1/2 h-8 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full transition-all duration-150 ${
-                      judge?.hit ? "bg-success" : "bg-warning"
-                    }`}
-                    style={{ left: `${50 + markerPos * 45}%` }}
-                  />
-                )}
-              </div>
-              <p className="mt-2 text-caption font-semibold uppercase tracking-wider text-foreground-muted">
-                {markerPos === null
-                  ? "cante para o marcador aparecer"
-                  : judge?.hit
-                    ? "afinado! ✨"
-                    : "ajuste o tom"}
-              </p>
-            </div>
+            <PitchMeter
+              className="max-w-xs"
+              centsOff={judge?.centsOff ?? null}
+              hit={judge?.hit ?? false}
+              idleLabel="cante para o marcador aparecer"
+              hitLabel="afinado! ✨"
+            />
 
             <div className="flex items-center gap-2 text-caption text-foreground-muted">
               <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-error" />
@@ -207,12 +192,7 @@ export function SingView({
       </section>
 
       <footer>
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-elevated">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-primary to-secondary"
-            style={{ width: `${progress * 100}%` }}
-          />
-        </div>
+        <ProgressBar value={progress} />
       </footer>
     </main>
   );

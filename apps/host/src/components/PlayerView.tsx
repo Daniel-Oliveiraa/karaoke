@@ -1,5 +1,6 @@
 "use client";
 
+import { PitchMeter, ProgressBar } from "@jamroom/ui";
 import type { Jam, LivePitch, Song } from "@jamroom/shared-types";
 
 /**
@@ -38,10 +39,6 @@ export function PlayerView({
 
   const progress = Math.min(1, Math.max(0, time / song.durationSec));
   const remaining = Math.max(0, Math.round(song.durationSec - time));
-
-  // barra de afinação: desloca o marcador conforme a distância em semitons
-  const offset = pitch?.centsOff ?? null;
-  const markerPos = offset === null ? null : Math.max(-1, Math.min(1, offset / 3));
 
   return (
     <main
@@ -85,32 +82,16 @@ export function PlayerView({
         )}
 
         {/* barra de afinação ao vivo */}
-        <div className="mt-8 w-[420px]">
-          <div className="relative h-3 rounded-full bg-surface-elevated">
-            <div className="absolute left-1/2 top-1/2 h-6 w-1 -translate-x-1/2 -translate-y-1/2 rounded bg-border" />
-            {markerPos !== null && (
-              <div
-                className={`absolute top-1/2 h-8 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full transition-all duration-150 ${
-                  pitch?.hit ? "bg-success" : "bg-warning"
-                }`}
-                style={{ left: `${50 + markerPos * 45}%` }}
-              />
-            )}
-          </div>
-          <p className="mt-2 text-caption font-semibold uppercase tracking-wider text-foreground-muted">
-            {markerPos === null ? "aguardando voz..." : pitch?.hit ? "afinado!" : "ajuste o tom"}
-          </p>
-        </div>
+        <PitchMeter
+          className="mt-8 w-[420px] text-center"
+          centsOff={pitch?.centsOff ?? null}
+          hit={pitch?.hit ?? false}
+        />
       </section>
 
       {/* barra inferior: progresso, próxima e código */}
       <footer className="border-t border-white/10 bg-background/70 px-12 py-6 backdrop-blur-glass">
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-elevated">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-primary to-secondary"
-            style={{ width: `${progress * 100}%` }}
-          />
-        </div>
+        <ProgressBar value={progress} />
         <div className="mt-4 flex items-center justify-between">
           <p className="text-body text-foreground-muted">
             {nextSong ? (
