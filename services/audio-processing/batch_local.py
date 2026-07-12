@@ -10,7 +10,12 @@ Estrutura esperada — uma pasta por musica dentro de input/ultrastar/:
     minha-musica-2/
       ...
 
-Uso: python batch_local.py
+Uso: python batch_local.py [--strip-vocals]
+
+--strip-vocals: remove a voz de cada audio com o Demucs (~3min/musica em
+CPU) e usa o instrumental gerado na TV — karaoke de verdade a partir da
+gravacao original, com timing identico ao do mapa (um instrumental
+baixado de outra fonte desalinharia da letra).
 
 O id/titulo/artista saem dos cabecalhos do proprio txt. Pacotes ja
 importados (json existente em apps/api/media) sao pulados; para
@@ -24,6 +29,7 @@ de producao deve vir do licenciamento B2B (ver CLAUDE.md).
 
 from __future__ import annotations
 
+import argparse
 import re
 import subprocess
 import sys
@@ -71,6 +77,14 @@ def find_audio(folder: Path, headers: dict[str, str]) -> Path | None:
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description="Importa pacotes UltraStar locais")
+    ap.add_argument(
+        "--strip-vocals",
+        action="store_true",
+        help="gera instrumental com Demucs (karaoke real; ~3min/musica em CPU)",
+    )
+    args = ap.parse_args()
+
     if not INPUT.exists():
         INPUT.mkdir(parents=True, exist_ok=True)
         print(f"Pasta criada: {INPUT}")
@@ -111,17 +125,17 @@ def main() -> None:
             continue
 
         try:
-            subprocess.run(
-                [
-                    sys.executable, str(HERE / "ultrastar.py"),
-                    "--txt", str(txt),
-                    "--audio", str(audio),
-                    "--id", slug,
-                    "--attribution",
-                    "importação local — uso pessoal/estudo, não licenciada para uso comercial",
-                ],
-                check=True,
-            )
+            cmd = [
+                sys.executable, str(HERE / "ultrastar.py"),
+                "--txt", str(txt),
+                "--audio", str(audio),
+                "--id", slug,
+                "--attribution",
+                "importação local — uso pessoal/estudo, não licenciada para uso comercial",
+            ]
+            if args.strip_vocals:
+                cmd.append("--strip-vocals")
+            subprocess.run(cmd, check=True)
             ok += 1
         except Exception as e:  # noqa: BLE001
             fail.append(folder.name)
