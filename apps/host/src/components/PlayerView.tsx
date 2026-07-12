@@ -15,6 +15,7 @@ export function PlayerView({
   pitch,
   songsById,
   micStats,
+  onSkip,
 }: {
   jam: Jam;
   song: Song;
@@ -22,6 +23,7 @@ export function PlayerView({
   pitch: LivePitch | null;
   songsById: Map<string, Song>;
   micStats?: MicStats | null;
+  onSkip?: () => void;
 }) {
   const item = jam.queue.find((i) => i.id === jam.currentItemId);
   const singer = jam.participants.find((p) => p.id === item?.participantId);
@@ -139,10 +141,21 @@ export function PlayerView({
               "Fila vazia — adicionem a próxima pelo celular!"
             )}
           </p>
-          <p className="text-body text-foreground-muted">
-            {Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, "0")} restantes ·
-            Jam <span className="font-bold tracking-widest text-foreground">{jam.code}</span>
-          </p>
+          <div className="flex items-center gap-6">
+            <p className="text-body text-foreground-muted">
+              {Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, "0")} restantes ·
+              Jam <span className="font-bold tracking-widest text-foreground">{jam.code}</span>
+            </p>
+            {onSkip && (
+              <button
+                type="button"
+                onClick={onSkip}
+                className="rounded-md border border-border px-4 py-2 text-caption font-semibold text-foreground-muted transition-colors hover:border-primary/50 hover:text-foreground"
+              >
+                Pular música ⏭
+              </button>
+            )}
+          </div>
         </div>
       </footer>
     </main>

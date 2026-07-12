@@ -19,6 +19,9 @@ import {
   endJam,
   getJam,
   nextQueued,
+  removeFromQueue,
+  scheduleSave,
+  skipCurrent,
 } from "./store";
 
 /**
@@ -146,7 +149,10 @@ const RESULT_FALLBACK_MS = 8000;
 
 function broadcastState(code: string): void {
   const record = getJam(code);
-  if (record) io.to(code).emit("jam:state", record.jam);
+  if (record) {
+    io.to(code).emit("jam:state", record.jam);
+    scheduleSave(); // toda mudança de estado passa por aqui
+  }
 }
 
 /** Aplica o resultado da música atual e volta a Jam para o estado de fila. */
@@ -173,6 +179,7 @@ io.on("connection", (socket: JamSocket) => {
     socket.data.role = "host";
     socket.data.code = record.jam.code;
     void socket.join(record.jam.code);
+    scheduleSave();
     cb({ ok: true, jam: record.jam });
   });
 
@@ -247,6 +254,18 @@ io.on("connection", (socket: JamSocket) => {
     broadcastState(code);
   });
 
+  socket.on("host:skip_song", () => {
+    const code = socket.data.code;
+    if (socket.data.role !== "host" || !code) return;
+    const record = getJam(code);
+    if (!record) return;
+    if (record.resultTimeout) {
+      clearTimeout(record.resultTimeout);
+      record.resultTimeout = null;
+    }
+    if (skipCurrent(record.jam)) broadcastState(code);
+  });
+
   socket.on("host:end_jam", () => {
     const code = socket.data.code;
     if (socket.data.role !== "host" || !code) return;
@@ -296,6 +315,30 @@ io.on("connection", (socket: JamSocket) => {
     if (!record || record.jam.status === "ended" || !getSong(songId)) return;
     addToQueue(record.jam, songId, participantId);
     broadcastState(code);
+  });
+
+  socket.on("participant:remove_song", (queueItemId) => {
+    const { code, participantId } = socket.data;
+    if (socket.data.role !== "participant" || !code || !participantId) return;
+    const record = getJam(code);
+    if (!record || record.jam.status === "ended") return;
+    if (removeFromQueue(record.jam, queueItemId, participantId)) {
+      broadcastState(code);
+    }
+  });
+
+  socket.on("participant:skip_song", () => {
+    const { code, participantId } = socket.data;
+    if (socket.data.role !== "participant" || !code || !participantId) return;
+    const record = getJam(code);
+    if (!record) return;
+    const item = currentItem(record.jam);
+    if (!item || item.participantId !== participantId) return; // só o cantor da vez
+    if (record.resultTimeout) {
+      clearTimeout(record.resultTimeout);
+      record.resultTimeout = null;
+    }
+    if (skipCurrent(record.jam)) broadcastState(code);
   });
 
   socket.on("participant:pitch", (sample) => {

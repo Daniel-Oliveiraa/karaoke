@@ -180,6 +180,8 @@ export interface ClientToServerEvents {
   "host:song_ended": () => void;
   /** Host avança da tela de resultado de volta para a fila/lobby. */
   "host:continue": () => void;
+  /** Host pula a música em andamento (sem pontuação, sem tela de resultado). */
+  "host:skip_song": () => void;
   /** Host encerra a Jam. */
   "host:end_jam": () => void;
 
@@ -194,6 +196,10 @@ export interface ClientToServerEvents {
     cb: (res: JoinResult) => void
   ) => void;
   "participant:add_song": (songId: string) => void;
+  /** Participante remove uma música SUA que ainda está na fila. */
+  "participant:remove_song": (queueItemId: string) => void;
+  /** O cantor da vez desiste da música em andamento (sem pontuação). */
+  "participant:skip_song": () => void;
   /** Amostra de pitch ao vivo (retransmitida ao host). */
   "participant:pitch": (sample: Omit<LivePitch, "participantId">) => void;
   /** Score final calculado no client ao fim da música. */

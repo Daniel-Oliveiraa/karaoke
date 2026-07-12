@@ -186,6 +186,7 @@ export default function SessionPage({
           pitch={pitch}
           songsById={songsById}
           micStats={micStats}
+          onSkip={() => getSocket().emit("host:skip_song")}
         />
       );
     }

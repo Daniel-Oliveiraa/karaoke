@@ -99,7 +99,47 @@ expect(
 );
 host.emit("host:continue");
 
-// 10. host encerra
+// 10. participante remove música própria da fila
+part.emit("participant:add_song", song.id);
+await new Promise((r) => setTimeout(r, 150));
+state = hostStates.at(-1);
+const toRemove = state.queue.find((i) => i.status === "queued");
+part.emit("participant:remove_song", toRemove.id);
+await new Promise((r) => setTimeout(r, 150));
+state = hostStates.at(-1);
+expect(
+  !state.queue.some((i) => i.id === toRemove.id),
+  "música removida da fila pelo dono"
+);
+
+// 11. pular música em andamento (host)
+part.emit("participant:add_song", song.id);
+await new Promise((r) => setTimeout(r, 150));
+host.emit("host:start_song");
+await new Promise((r) => setTimeout(r, 150));
+host.emit("host:skip_song");
+await new Promise((r) => setTimeout(r, 150));
+state = hostStates.at(-1);
+expect(
+  state.status === "lobby" && state.currentItemId === null && state.lastResult === null,
+  "host pulou a música (sem resultado, direto para o lobby)"
+);
+expect(
+  state.participants[0].totalScore === 843,
+  "pulada não mexeu na pontuação"
+);
+
+// 12. cantor desiste da própria música
+part.emit("participant:add_song", song.id);
+await new Promise((r) => setTimeout(r, 150));
+host.emit("host:start_song");
+await new Promise((r) => setTimeout(r, 150));
+part.emit("participant:skip_song");
+await new Promise((r) => setTimeout(r, 150));
+state = hostStates.at(-1);
+expect(state.status === "lobby", "cantor desistiu e a Jam voltou ao lobby");
+
+// 13. host encerra
 const endedPromise = new Promise((res) => part.once("jam:ended", res));
 host.emit("host:end_jam");
 const ended = await endedPromise;

@@ -282,8 +282,15 @@ export function SingView({
         )}
       </section>
 
-      <footer>
+      <footer className="flex flex-col gap-3">
         <ProgressBar value={progress} />
+        <button
+          type="button"
+          onClick={() => getSocket().emit("participant:skip_song")}
+          className="self-center text-caption text-foreground-muted underline-offset-2 transition-colors hover:text-foreground hover:underline"
+        >
+          Desistir desta música
+        </button>
       </footer>
     </main>
   );

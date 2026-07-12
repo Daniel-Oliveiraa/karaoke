@@ -150,6 +150,18 @@ export function HubView({
                         #{i + (visibleQueue.some((q) => q.status === "playing") ? 0 : 1)}
                       </span>
                     )}
+                    {mine && item.status === "queued" && (
+                      <button
+                        type="button"
+                        aria-label={`Remover ${song?.title ?? "música"} da fila`}
+                        onClick={() =>
+                          getSocket().emit("participant:remove_song", item.id)
+                        }
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-foreground-muted transition-colors hover:bg-error/15 hover:text-error"
+                      >
+                        ✕
+                      </button>
+                    )}
                   </li>
                 );
               })}
