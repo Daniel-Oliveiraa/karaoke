@@ -134,13 +134,29 @@ export async function startTvMic(
     }
   };
 
+  // candidatos do host podem chegar antes da answer ser aplicada —
+  // enfileirar até setRemoteDescription concluir
+  let remoteReady = false;
+  let pendingCandidates: RTCIceCandidateInit[] = [];
+
   const onSignal = (payload: { participantId: string; data: MicSignalData }) => {
     if (payload.participantId !== myParticipantId) return;
     const { data } = payload;
     if (data.description?.type === "answer") {
-      void pc.setRemoteDescription(data.description);
+      void pc.setRemoteDescription(data.description).then(() => {
+        remoteReady = true;
+        for (const c of pendingCandidates) {
+          void pc.addIceCandidate(c).catch(() => undefined);
+        }
+        pendingCandidates = [];
+      });
     } else if (data.candidate) {
-      void pc.addIceCandidate(data.candidate as RTCIceCandidateInit);
+      const candidate = data.candidate as RTCIceCandidateInit;
+      if (remoteReady) {
+        void pc.addIceCandidate(candidate).catch(() => undefined);
+      } else {
+        pendingCandidates.push(candidate);
+      }
     }
   };
   socket.on("jam:mic_signal", onSignal);

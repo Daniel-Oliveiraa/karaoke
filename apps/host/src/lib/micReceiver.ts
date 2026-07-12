@@ -128,6 +128,11 @@ export function createMicReceiver(
   let lastFillMs = TARGET_BUFFER_MS;
   let packets = 0;
   let bytes = 0;
+  // candidatos ICE chegam milissegundos após a oferta, antes de
+  // setRemoteDescription terminar — enfileirar até lá (senão:
+  // "The remote description was null")
+  let remoteReady = false;
+  let pendingCandidates: RTCIceCandidateInit[] = [];
 
   function teardownPeer() {
     if (statsTimer) clearInterval(statsTimer);
@@ -144,6 +149,8 @@ export function createMicReceiver(
     lastFillMs = TARGET_BUFFER_MS;
     packets = 0;
     bytes = 0;
+    remoteReady = false;
+    pendingCandidates = [];
     onStats(null);
   }
 
@@ -285,8 +292,16 @@ export function createMicReceiver(
 
     pc.onconnectionstatechange = () => void collectStats();
 
-    player = await setupAudio();
+    // aplicar a oferta ANTES de qualquer trabalho demorado (carregar o
+    // worklet) — os candidatos do celular chegam logo atrás da oferta
     await pc.setRemoteDescription({ type: "offer", sdp });
+    remoteReady = true;
+    for (const c of pendingCandidates) {
+      void pc.addIceCandidate(c).catch(() => undefined);
+    }
+    pendingCandidates = [];
+
+    player = await setupAudio();
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     socket.emit("host:mic_signal", participantId, {
@@ -300,8 +315,13 @@ export function createMicReceiver(
     const { participantId, data } = payload;
     if (data.description?.type === "offer") {
       void handleOffer(participantId, data.description.sdp);
-    } else if (data.candidate && pc && participantId === currentSinger) {
-      void pc.addIceCandidate(data.candidate as RTCIceCandidateInit);
+    } else if (data.candidate && participantId === currentSinger) {
+      const candidate = data.candidate as RTCIceCandidateInit;
+      if (pc && remoteReady) {
+        void pc.addIceCandidate(candidate).catch(() => undefined);
+      } else {
+        pendingCandidates.push(candidate);
+      }
     }
   };
   socket.on("jam:mic_signal", onSignal);
