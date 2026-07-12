@@ -20,6 +20,8 @@ export interface MicStats {
   jitterBufferMs: number;
   outputMs: number;
   connected: boolean;
+  /** true = AudioContext suspenso pela política de autoplay (sem som). */
+  audioBlocked: boolean;
 }
 
 export interface MicReceiverManager {
@@ -119,9 +121,13 @@ export function createMicReceiver(
   let pc: RTCPeerConnection | null = null;
   let ctx: AudioContext | null = null;
   let player: AudioWorkletNode | null = null;
+  let voiceBus: GainNode | null = null;
+  let trackSink: HTMLAudioElement | null = null;
   let statsTimer: ReturnType<typeof setInterval> | null = null;
   let currentSinger: string | null = null;
   let lastFillMs = TARGET_BUFFER_MS;
+  let packets = 0;
+  let bytes = 0;
 
   function teardownPeer() {
     if (statsTimer) clearInterval(statsTimer);
@@ -129,16 +135,32 @@ export function createMicReceiver(
     pc?.close();
     pc = null;
     player = null;
+    voiceBus = null;
+    trackSink?.remove();
+    trackSink = null;
     void ctx?.close();
     ctx = null;
     currentSinger = null;
     lastFillMs = TARGET_BUFFER_MS;
+    packets = 0;
+    bytes = 0;
     onStats(null);
   }
 
   async function setupAudio(): Promise<AudioWorkletNode> {
     ctx = new AudioContext({ latencyHint: "interactive" });
-    if (ctx.state === "suspended") void ctx.resume();
+    // Política de autoplay: se a página da TV foi carregada sem nenhum
+    // clique, o contexto nasce suspenso (mudo). Tenta retomar já, e de
+    // novo a cada gesto até conseguir; o estado vai no MicStats para a
+    // UI avisar.
+    if (ctx.state === "suspended") {
+      void ctx.resume();
+      const resume = () => {
+        if (ctx?.state === "suspended") void ctx.resume();
+      };
+      document.addEventListener("click", resume);
+      document.addEventListener("keydown", resume);
+    }
     await ctx.audioWorklet.addModule(
       URL.createObjectURL(new Blob([PLAYER_WORKLET], { type: "application/javascript" }))
     );
@@ -151,10 +173,15 @@ export function createMicReceiver(
       if (typeof e.data?.fillMs === "number") lastFillMs = e.data.fillMs;
     };
 
+    // barramento de entrada da voz: recebe o worklet (caminho PCM) e o
+    // fallback de track (celular rodando código antigo)
+    voiceBus = ctx.createGain();
+    voiceBus.gain.value = 1;
+
     // voz direta
     const dry = ctx.createGain();
     dry.gain.value = 0.85;
-    node.connect(dry).connect(ctx.destination);
+    voiceBus.connect(dry).connect(ctx.destination);
 
     // reverb curto (delay com feedback filtrado) — mascara a latência
     const delay = ctx.createDelay(0.5);
@@ -166,10 +193,11 @@ export function createMicReceiver(
     damp.frequency.value = 3200;
     const wet = ctx.createGain();
     wet.gain.value = 0.3;
-    node.connect(delay);
+    voiceBus.connect(delay);
     delay.connect(damp).connect(feedback).connect(delay);
     delay.connect(wet).connect(ctx.destination);
 
+    node.connect(voiceBus);
     return node;
   }
 
@@ -193,12 +221,22 @@ export function createMicReceiver(
       ((ctx && "outputLatency" in ctx && ctx.outputLatency) ||
         ctx?.baseLatency ||
         0.02) * 1000;
+    const audioBlocked = ctx?.state !== "running";
+    // diagnóstico acessível no console da TV: window.__tvmic
+    (window as unknown as Record<string, unknown>).__tvmic = {
+      packets,
+      bytes,
+      ctxState: ctx?.state,
+      fillMs: Math.round(lastFillMs),
+      connection: pc?.connectionState,
+    };
     onStats({
       totalMs: Math.round(CAPTURE_MS + rttMs / 2 + lastFillMs + outputMs),
       networkMs: Math.round(rttMs / 2),
       jitterBufferMs: Math.round(lastFillMs),
       outputMs: Math.round(outputMs),
       connected,
+      audioBlocked,
     });
   }
 
@@ -225,9 +263,24 @@ export function createMicReceiver(
             if (header.type === "config") player?.port.postMessage(header);
           } catch {}
         } else if (player) {
+          packets += 1;
+          bytes += (msg.data as ArrayBuffer).byteLength;
           player.port.postMessage(msg.data, [msg.data as ArrayBuffer]);
         }
       };
+    };
+
+    // fallback: celular rodando a versão anterior (track de áudio Opus)
+    pc.ontrack = (e) => {
+      if (!ctx || !voiceBus) return;
+      const stream = e.streams[0] ?? new MediaStream([e.track]);
+      // bug conhecido do Chrome: stream remoto só soa no WebAudio se
+      // também estiver preso a um elemento <audio> (mutado)
+      trackSink = new Audio();
+      trackSink.srcObject = stream;
+      trackSink.muted = true;
+      void trackSink.play().catch(() => undefined);
+      ctx.createMediaStreamSource(stream).connect(voiceBus);
     };
 
     pc.onconnectionstatechange = () => void collectStats();

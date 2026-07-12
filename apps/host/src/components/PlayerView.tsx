@@ -53,19 +53,33 @@ export function PlayerView({
     >
       {/* medidor do protótipo "voz na TV" */}
       {micStats && (
-        <div className="absolute left-1/2 top-4 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/10 bg-background/70 px-4 py-1.5 backdrop-blur-glass">
+        <div
+          className={`absolute left-1/2 top-4 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full border px-4 py-1.5 backdrop-blur-glass ${
+            micStats.audioBlocked
+              ? "border-warning/60 bg-warning/15"
+              : "border-white/10 bg-background/70"
+          }`}
+        >
           <span
             className={`inline-block h-2 w-2 rounded-full ${
               micStats.connected ? "bg-success" : "bg-warning animate-pulse"
             }`}
           />
-          <span className="text-caption font-semibold text-foreground">
-            Voz na TV · ~{micStats.totalMs} ms
-          </span>
-          <span className="text-caption text-foreground-muted">
-            (rede {micStats.networkMs} · buffer {micStats.jitterBufferMs} · saída{" "}
-            {micStats.outputMs})
-          </span>
+          {micStats.audioBlocked ? (
+            <span className="text-caption font-semibold text-warning">
+              Som bloqueado pelo navegador — clique na tela da TV para liberar
+            </span>
+          ) : (
+            <>
+              <span className="text-caption font-semibold text-foreground">
+                Voz na TV · ~{micStats.totalMs} ms
+              </span>
+              <span className="text-caption text-foreground-muted">
+                (rede {micStats.networkMs} · buffer {micStats.jitterBufferMs} · saída{" "}
+                {micStats.outputMs})
+              </span>
+            </>
+          )}
         </div>
       )}
 
