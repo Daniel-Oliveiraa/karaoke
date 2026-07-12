@@ -4,16 +4,13 @@ import type { MicSignalData } from "@jamroom/shared-types";
 import { getSocket } from "./socket";
 
 /**
- * Receptor da "voz na TV": aceita a oferta WebRTC do cantor da vez e toca
- * a voz nos alto-falantes da TV com a menor latência que o navegador
- * permite:
- * - `jitterBufferTarget = 0` (o Chrome mantém 30–80ms de folga por padrão);
- * - `a=ptime:10` na resposta SDP (frames Opus de 10ms em vez de 20ms);
- * - saída via WebAudio com `latencyHint: "interactive"`;
- * - reverb curto na voz — os ~50ms restantes são percebidos como efeito
- *   de karaokê, não como atraso (truque padrão da indústria).
+ * Receptor da "voz na TV" v2: recebe PCM cru (Int16) por RTCDataChannel
+ * e toca via AudioWorklet com ring buffer próprio (~30ms) — em vez do
+ * jitter buffer do WebRTC, que tem piso de ~40–80ms.
  *
- * Também estima a latência fim-a-fim por getStats() para o medidor na tela.
+ * O worklet de playback faz resampling linear (taxa do celular → taxa da
+ * TV) e reporta o nível real do buffer, então o medidor mostra números
+ * medidos, não chutados. Reverb curto na voz mascara o atraso residual.
  */
 
 export interface MicStats {
@@ -29,14 +26,90 @@ export interface MicReceiverManager {
   stop: () => void;
 }
 
-/** Latência fixa estimada de captura+encode no celular (não mensurável daqui). */
-const CAPTURE_ENCODE_MS = 25;
+/** Captura no celular: entrada (~8ms) + pacote de 8ms. */
+const CAPTURE_MS = 16;
+/** Alvo do ring buffer na TV. */
+const TARGET_BUFFER_MS = 30;
 
-function forcePtime10(sdp: string): string {
-  // remove ptime existente e injeta 10ms na seção de áudio
-  const cleaned = sdp.replace(/a=ptime:\d+\r\n/g, "");
-  return cleaned.replace(/(m=audio[^\r\n]*\r\n)/, "$1a=ptime:10\r\n");
+const PLAYER_WORKLET = `
+class PcmPlayer extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.srcRate = 48000;
+    this.ring = new Float32Array(48000); // 1s
+    this.writeIdx = 0;
+    this.readIdx = 0;   // fracionário (resampling)
+    this.started = false;
+    this.underruns = 0;
+    this.lastReport = 0;
+    this.port.onmessage = (e) => {
+      const d = e.data;
+      if (d && d.type === "config") {
+        this.srcRate = d.sampleRate || 48000;
+        this.ring = new Float32Array(this.srcRate);
+        this.writeIdx = 0;
+        this.readIdx = 0;
+        this.started = false;
+        return;
+      }
+      const pcm = new Int16Array(d);
+      for (let i = 0; i < pcm.length; i++) {
+        this.ring[this.writeIdx % this.ring.length] = pcm[i] / 0x8000;
+        this.writeIdx++;
+      }
+    };
+  }
+
+  fill() {
+    return this.writeIdx - Math.floor(this.readIdx);
+  }
+
+  process(_inputs, outputs) {
+    const out = outputs[0][0];
+    if (!out) return true;
+
+    const target = (${TARGET_BUFFER_MS} / 1000) * this.srcRate;
+    const ratio = this.srcRate / sampleRate;
+
+    if (!this.started) {
+      if (this.fill() >= target) this.started = true;
+      else { out.fill(0); return true; }
+    }
+
+    for (let i = 0; i < out.length; i++) {
+      if (this.fill() < 2) {
+        // underrun: silêncio e volta a acumular até o alvo
+        out.fill(0, i);
+        this.started = false;
+        this.underruns++;
+        break;
+      }
+      const idx = Math.floor(this.readIdx);
+      const frac = this.readIdx - idx;
+      const a = this.ring[idx % this.ring.length];
+      const b = this.ring[(idx + 1) % this.ring.length];
+      out[i] = a + (b - a) * frac;
+      this.readIdx += ratio;
+    }
+
+    // descarta excesso se o buffer crescer demais (rajada de rede)
+    const maxFill = target * 3;
+    if (this.fill() > maxFill) this.readIdx = this.writeIdx - target;
+
+    if (currentTime - this.lastReport > 1) {
+      this.lastReport = currentTime;
+      this.port.postMessage({
+        fillMs: (this.fill() / this.srcRate) * 1000,
+        underruns: this.underruns,
+        started: this.started,
+      });
+      this.underruns = 0;
+    }
+    return true;
+  }
 }
+registerProcessor("jamroom-pcm-player", PcmPlayer);
+`;
 
 export function createMicReceiver(
   onStats: (stats: MicStats | null) => void
@@ -45,45 +118,43 @@ export function createMicReceiver(
 
   let pc: RTCPeerConnection | null = null;
   let ctx: AudioContext | null = null;
-  let sink: HTMLAudioElement | null = null;
+  let player: AudioWorkletNode | null = null;
   let statsTimer: ReturnType<typeof setInterval> | null = null;
   let currentSinger: string | null = null;
-  // média por intervalo do jitter buffer (a cumulativa inclui o setup)
-  let lastJbDelay = 0;
-  let lastJbCount = 0;
+  let lastFillMs = TARGET_BUFFER_MS;
 
   function teardownPeer() {
     if (statsTimer) clearInterval(statsTimer);
     statsTimer = null;
-    lastJbDelay = 0;
-    lastJbCount = 0;
     pc?.close();
     pc = null;
-    sink?.remove();
-    sink = null;
+    player = null;
     void ctx?.close();
     ctx = null;
     currentSinger = null;
+    lastFillMs = TARGET_BUFFER_MS;
     onStats(null);
   }
 
-  function attachAudio(stream: MediaStream) {
-    // Bug conhecido do Chrome: um MediaStream remoto de WebRTC só produz
-    // áudio no WebAudio se também estiver ligado a um elemento <audio>
-    // (pode ficar mudo). O elemento fica mutado; quem toca é o grafo.
-    sink = new Audio();
-    sink.srcObject = stream;
-    sink.muted = true;
-    void sink.play().catch(() => undefined);
-
+  async function setupAudio(): Promise<AudioWorkletNode> {
     ctx = new AudioContext({ latencyHint: "interactive" });
     if (ctx.state === "suspended") void ctx.resume();
-    const src = ctx.createMediaStreamSource(stream);
+    await ctx.audioWorklet.addModule(
+      URL.createObjectURL(new Blob([PLAYER_WORKLET], { type: "application/javascript" }))
+    );
+    const node = new AudioWorkletNode(ctx, "jamroom-pcm-player", {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+    });
+    node.port.onmessage = (e) => {
+      if (typeof e.data?.fillMs === "number") lastFillMs = e.data.fillMs;
+    };
 
     // voz direta
     const dry = ctx.createGain();
     dry.gain.value = 0.85;
-    src.connect(dry).connect(ctx.destination);
+    node.connect(dry).connect(ctx.destination);
 
     // reverb curto (delay com feedback filtrado) — mascara a latência
     const delay = ctx.createDelay(0.5);
@@ -95,33 +166,23 @@ export function createMicReceiver(
     damp.frequency.value = 3200;
     const wet = ctx.createGain();
     wet.gain.value = 0.3;
-    src.connect(delay);
+    node.connect(delay);
     delay.connect(damp).connect(feedback).connect(delay);
     delay.connect(wet).connect(ctx.destination);
+
+    return node;
   }
 
   async function collectStats() {
     if (!pc) return;
     const connected = pc.connectionState === "connected";
     let rttMs = 0;
-    let jbMs = 0;
     try {
       const stats = await pc.getStats();
       stats.forEach((report) => {
         if (report.type === "candidate-pair" && report.state === "succeeded") {
           if (typeof report.currentRoundTripTime === "number") {
             rttMs = report.currentRoundTripTime * 1000;
-          }
-        }
-        if (report.type === "inbound-rtp" && report.kind === "audio") {
-          const delay = report.jitterBufferDelay;
-          const count = report.jitterBufferEmittedCount;
-          if (typeof delay === "number" && typeof count === "number") {
-            const dDelay = delay - lastJbDelay;
-            const dCount = count - lastJbCount;
-            lastJbDelay = delay;
-            lastJbCount = count;
-            if (dCount > 0) jbMs = (dDelay / dCount) * 1000;
           }
         }
       });
@@ -133,9 +194,9 @@ export function createMicReceiver(
         ctx?.baseLatency ||
         0.02) * 1000;
     onStats({
-      totalMs: Math.round(CAPTURE_ENCODE_MS + rttMs / 2 + jbMs + outputMs),
+      totalMs: Math.round(CAPTURE_MS + rttMs / 2 + lastFillMs + outputMs),
       networkMs: Math.round(rttMs / 2),
-      jitterBufferMs: Math.round(jbMs),
+      jitterBufferMs: Math.round(lastFillMs),
       outputMs: Math.round(outputMs),
       connected,
     });
@@ -153,26 +214,27 @@ export function createMicReceiver(
         });
       }
     };
-    pc.ontrack = (e) => {
-      const stream = e.streams[0] ?? new MediaStream([e.track]);
-      attachAudio(stream);
-      // encolhe o jitter buffer ao mínimo (nomes variam entre versões)
-      const receiver = e.receiver as RTCRtpReceiver & {
-        jitterBufferTarget?: number;
-        playoutDelayHint?: number;
+
+    pc.ondatachannel = (e) => {
+      const dc = e.channel;
+      dc.binaryType = "arraybuffer";
+      dc.onmessage = (msg) => {
+        if (typeof msg.data === "string") {
+          try {
+            const header = JSON.parse(msg.data) as { type: string; sampleRate: number };
+            if (header.type === "config") player?.port.postMessage(header);
+          } catch {}
+        } else if (player) {
+          player.port.postMessage(msg.data, [msg.data as ArrayBuffer]);
+        }
       };
-      try {
-        receiver.jitterBufferTarget = 0;
-      } catch {}
-      try {
-        receiver.playoutDelayHint = 0;
-      } catch {}
     };
+
     pc.onconnectionstatechange = () => void collectStats();
 
+    player = await setupAudio();
     await pc.setRemoteDescription({ type: "offer", sdp });
     const answer = await pc.createAnswer();
-    answer.sdp = forcePtime10(answer.sdp ?? "");
     await pc.setLocalDescription(answer);
     socket.emit("host:mic_signal", participantId, {
       description: { type: "answer", sdp: answer.sdp ?? "" },
