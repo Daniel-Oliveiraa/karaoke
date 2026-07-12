@@ -32,6 +32,7 @@ export function SingView({
 
   const [tvMicOn, setTvMicOn] = useState(false);
   const [tvMicBusy, setTvMicBusy] = useState(false);
+  const [tvMicLevel, setTvMicLevel] = useState<number | null>(null);
 
   const trackerRef = useRef<ScoreTracker | null>(null);
   const captureRef = useRef<PitchCapture | null>(null);
@@ -101,11 +102,17 @@ export function SingView({
       tvMicRef.current.stop();
       tvMicRef.current = null;
       setTvMicOn(false);
+      setTvMicLevel(null);
       return;
     }
     setTvMicBusy(true);
     try {
-      tvMicRef.current = await startTvMic(me.id);
+      // reusar o stream da detecção de pitch é obrigatório: Android
+      // entrega silêncio numa segunda captura simultânea do microfone
+      tvMicRef.current = await startTvMic(me.id, {
+        sharedStream: captureRef.current?.stream,
+        onLevel: setTvMicLevel,
+      });
       setTvMicOn(true);
     } catch {
       setMicError("Não foi possível transmitir sua voz para a TV.");
@@ -249,6 +256,28 @@ export function SingView({
               🔊 Voz na TV {tvMicOn ? "ligada" : "desligada"}
               <span className="font-normal">(experimental)</span>
             </button>
+
+            {/* nível da voz enviada à TV — detecta captura muda na hora */}
+            {tvMicOn && tvMicLevel !== null && (
+              <div className="w-full max-w-xs">
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-elevated">
+                  <div
+                    className={`h-full rounded-full transition-all duration-200 ${
+                      tvMicLevel > 0.01 ? "bg-success" : "bg-warning"
+                    }`}
+                    style={{
+                      width: `${Math.min(100, Math.round(tvMicLevel * 600))}%`,
+                    }}
+                  />
+                </div>
+                {tvMicLevel <= 0.005 && (
+                  <p className="mt-1.5 text-caption text-warning">
+                    Sem sinal de voz — o microfone pode estar sendo usado por
+                    outro app. Desligue e ligue o toggle de novo.
+                  </p>
+                )}
+              </div>
+            )}
           </>
         )}
       </section>

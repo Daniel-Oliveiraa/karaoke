@@ -27,11 +27,16 @@ class PcmSender extends AudioWorkletProcessor {
   constructor() {
     super();
     this.chunks = [];
+    this.sumSq = 0;
+    this.nSamples = 0;
+    this.lastLevel = 0;
   }
   process(inputs) {
     const ch = inputs[0] && inputs[0][0];
     if (!ch) return true;
     this.chunks.push(ch.slice(0));
+    for (let i = 0; i < ch.length; i++) this.sumSq += ch[i] * ch[i];
+    this.nSamples += ch.length;
     if (this.chunks.length >= ${CHUNKS_PER_PACKET}) {
       const n = this.chunks.reduce((s, c) => s + c.length, 0);
       const out = new Int16Array(n);
@@ -45,23 +50,48 @@ class PcmSender extends AudioWorkletProcessor {
       this.port.postMessage(out.buffer, [out.buffer]);
       this.chunks = [];
     }
+    // nível de voz a cada ~0.5s — a UI usa para detectar captura muda
+    if (currentTime - this.lastLevel > 0.5 && this.nSamples > 0) {
+      this.lastLevel = currentTime;
+      this.port.postMessage({
+        type: "level",
+        rms: Math.sqrt(this.sumSq / this.nSamples),
+      });
+      this.sumSq = 0;
+      this.nSamples = 0;
+    }
     return true;
   }
 }
 registerProcessor("jamroom-pcm-sender", PcmSender);
 `;
 
-export async function startTvMic(myParticipantId: string): Promise<TvMicSession> {
+export async function startTvMic(
+  myParticipantId: string,
+  options?: {
+    /**
+     * Stream de microfone já aberto (o da detecção de pitch). Reusar é
+     * OBRIGATÓRIO no celular: Android entrega silêncio numa segunda
+     * captura simultânea do mic.
+     */
+    sharedStream?: MediaStream;
+    /** Nível RMS da voz enviada (~2x/s) — a UI detecta captura muda. */
+    onLevel?: (rms: number) => void;
+  }
+): Promise<TvMicSession> {
   const socket = getSocket();
 
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false,
-      channelCount: 1,
-    },
-  });
+  const ownsStream = !options?.sharedStream;
+  const stream =
+    options?.sharedStream ??
+    (await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1,
+      },
+    }));
 
   const ctx = new AudioContext({ latencyHint: "interactive" });
   if (ctx.state === "suspended") await ctx.resume();
@@ -85,9 +115,15 @@ export async function startTvMic(myParticipantId: string): Promise<TvMicSession>
   dc.onopen = () => {
     // header: taxa de amostragem do celular (a TV faz o resampling)
     dc.send(JSON.stringify({ type: "config", sampleRate: ctx.sampleRate }));
-    sender.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
-      if (dc.readyState === "open" && dc.bufferedAmount < MAX_BUFFERED_BYTES) {
-        dc.send(e.data);
+    sender.port.onmessage = (
+      e: MessageEvent<ArrayBuffer | { type: "level"; rms: number }>
+    ) => {
+      if (e.data instanceof ArrayBuffer) {
+        if (dc.readyState === "open" && dc.bufferedAmount < MAX_BUFFERED_BYTES) {
+          dc.send(e.data);
+        }
+      } else if (e.data?.type === "level") {
+        options?.onLevel?.(e.data.rms);
       }
     };
   };
@@ -123,7 +159,10 @@ export async function startTvMic(myParticipantId: string): Promise<TvMicSession>
       sender.disconnect();
       dc.close();
       pc.close();
-      for (const track of stream.getTracks()) track.stop();
+      // stream compartilhado pertence à detecção de pitch — não parar aqui
+      if (ownsStream) {
+        for (const track of stream.getTracks()) track.stop();
+      }
       void ctx.close();
     },
   };

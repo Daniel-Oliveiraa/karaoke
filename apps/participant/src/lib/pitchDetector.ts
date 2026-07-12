@@ -23,6 +23,12 @@ export interface PitchFrame {
 
 export interface PitchCapture {
   stop: () => void;
+  /**
+   * Stream do microfone em uso — compartilhado com a "voz na TV" para não
+   * abrir uma segunda captura (Android entrega silêncio na segunda sessão
+   * simultânea do mic).
+   */
+  stream: MediaStream;
 }
 
 // Código do processor serializado num Blob — evita servir arquivo estático
@@ -163,6 +169,7 @@ export async function startPitchCapture(
   source.connect(node);
 
   return {
+    stream,
     stop: () => {
       node.port.onmessage = null;
       source.disconnect();
