@@ -28,7 +28,7 @@ def main():
         )
 
         # --- TV (host) ---
-        tv = browser.new_page(viewport={"width": 1280, "height": 720})
+        tv = browser.new_page(viewport={"width": 1280, "height": 720}, ignore_https_errors=True)
         tv.goto("http://localhost:3001", timeout=90000)
         tv.wait_for_load_state("networkidle")
         tv.click("text=Abrir uma Jam nesta tela")
@@ -41,8 +41,8 @@ def main():
         print("ok - lobby da TV com codigo e QR")
 
         # --- celular (participante) ---
-        phone = browser.new_page(viewport={"width": 390, "height": 844})
-        phone.goto(f"http://localhost:3002/?code={code}", timeout=90000)
+        phone = browser.new_page(viewport={"width": 390, "height": 844}, ignore_https_errors=True)
+        phone.goto(f"https://localhost:3002/?code={code}", timeout=90000)
         phone.wait_for_load_state("networkidle")
         # codigo pre-preenchido pelo QR; falta o nome
         phone.fill("input[placeholder='Como te chamam?']", "Dani")

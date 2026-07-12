@@ -55,10 +55,23 @@ npm run dev:participant  # app do celular em :3002
 npm run dev:web          # landing em :3000 (independente dos demais)
 ```
 Fluxo manual: abrir `http://localhost:3001` → "Abrir uma Jam nesta tela" → no celular/aba mobile
-abrir `http://localhost:3002/?code=XXXX` (ou escanear o QR) → nome → adicionar música → a TV
+abrir `https://localhost:3002/?code=XXXX` (ou escanear o QR) → nome → adicionar música → a TV
 inicia sozinha (countdown 5s) → no celular "Liberar microfone e cantar".
-**Em rede local**: exportar `NEXT_PUBLIC_PARTICIPANT_URL=http://<IP-da-máquina>:3002` para o host
-(QR apontar para o IP) e `NEXT_PUBLIC_API_URL=http://<IP>:4001` para host e participant.
+
+**HTTPS local (obrigatório para o microfone no celular)**: getUserMedia só existe em contexto
+seguro, então participant e API rodam com o certificado self-signed de `certs/` (gitignored;
+regenerar com o comando openssl abaixo se o IP mudar). API sobe em HTTPS automaticamente quando
+`certs/dev.key`/`dev.crt` existem; participant usa `next dev --experimental-https` (script `dev`).
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -keyout certs/dev.key -out certs/dev.crt -days 825 \
+  -subj "//CN=jamroom-dev" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:<IP-DA-MAQUINA>"
+```
+**Em rede local** (celulares de verdade): exportar `NEXT_PUBLIC_PARTICIPANT_URL=https://<IP>:3002`
+para o host (QR aponta para lá) e `NEXT_PUBLIC_API_URL=https://<IP>:4001` para host e participant.
+No celular, aceitar o aviso de certificado 2x (uma vez em `https://<IP>:4001/health`, outra na
+página do participant); no PC, aceitar 1x para o host falar com a API. Também: `allowedDevOrigins`
+com o IP nos `next.config.ts` (Next 16 bloqueia assets de dev cross-origin) e regra de firewall
+inbound TCP 3001/3002/4001 (perfil Privado). IP atual configurado: 192.168.15.14.
 
 ### Testes (executar após mudanças no protocolo/scoring)
 ```bash

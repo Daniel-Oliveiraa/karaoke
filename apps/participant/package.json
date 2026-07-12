@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3002",
+    "dev": "next dev -p 3002 --experimental-https --experimental-https-key ../../certs/dev.key --experimental-https-cert ../../certs/dev.crt",
+    "dev:http": "next dev -p 3002",
     "build": "next build",
     "start": "next start -p 3002",
     "typecheck": "tsc --noEmit"

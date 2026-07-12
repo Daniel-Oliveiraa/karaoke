@@ -139,10 +139,16 @@ export function SingView({
       });
       captureRef.current = capture;
       setCapturing(true);
-    } catch {
-      setMicError(
-        "Não conseguimos acessar seu microfone. Verifique a permissão no navegador."
-      );
+    } catch (err) {
+      if (err instanceof Error && err.message === "insecure-context") {
+        setMicError(
+          "O navegador bloqueia o microfone em conexões sem HTTPS. Abra o app pelo endereço https:// (aceite o aviso de certificado) e tente de novo."
+        );
+      } else {
+        setMicError(
+          "Não conseguimos acessar seu microfone. Verifique a permissão no navegador."
+        );
+      }
     }
   }
 

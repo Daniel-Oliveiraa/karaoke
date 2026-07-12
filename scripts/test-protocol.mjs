@@ -7,10 +7,11 @@
  */
 import { io } from "socket.io-client";
 
-const API = process.env.API_URL ?? "http://localhost:4001";
+const API = process.env.API_URL ?? "https://localhost:4001";
 
 function connect() {
-  return io(API, { transports: ["websocket"] });
+  // certificado self-signed de dev (certs/) — não validar
+  return io(API, { transports: ["websocket"], rejectUnauthorized: false });
 }
 
 function fail(msg) {

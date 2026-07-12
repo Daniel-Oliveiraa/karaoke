@@ -1,6 +1,8 @@
-import { createReadStream, statSync } from "node:fs";
-import { createServer } from "node:http";
+import { createReadStream, readFileSync, statSync } from "node:fs";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { extname, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Server, type Socket } from "socket.io";
 import type {
   ClientToServerEvents,
@@ -36,7 +38,26 @@ interface SocketData {
 
 const PORT = Number(process.env.PORT ?? 4001);
 
-const httpServer = createServer((req, res) => {
+/**
+ * TLS de desenvolvimento: getUserMedia (microfone) só existe em contexto
+ * seguro, então o celular precisa falar HTTPS/WSS com a API. Se os
+ * certificados de certs/ existirem, o servidor sobe em HTTPS; sem eles,
+ * cai para HTTP puro (CI, etc).
+ */
+const CERT_DIR = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..", "certs");
+
+function loadTls(): { key: Buffer; cert: Buffer } | null {
+  try {
+    return {
+      key: readFileSync(join(CERT_DIR, "dev.key")),
+      cert: readFileSync(join(CERT_DIR, "dev.crt")),
+    };
+  } catch {
+    return null;
+  }
+}
+
+const requestHandler = (req: IncomingMessage, res: ServerResponse) => {
   // Endpoints HTTP simples para debug/health — o produto usa Socket.io.
   res.setHeader("Access-Control-Allow-Origin", "*");
   if (req.url === "/health") {
@@ -95,7 +116,12 @@ const httpServer = createServer((req, res) => {
   }
   res.writeHead(404);
   res.end();
-});
+};
+
+const tls = loadTls();
+const httpServer = tls
+  ? createHttpsServer(tls, requestHandler)
+  : createServer(requestHandler);
 
 const io = new Server<
   ClientToServerEvents,
@@ -328,5 +354,6 @@ io.on("connection", (socket: JamSocket) => {
 });
 
 httpServer.listen(PORT, () => {
-  console.log(`[jamroom-api] ouvindo em http://localhost:${PORT}`);
+  const proto = tls ? "https" : "http";
+  console.log(`[jamroom-api] ouvindo em ${proto}://localhost:${PORT}`);
 });

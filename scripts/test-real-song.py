@@ -29,15 +29,15 @@ def main():
             ],
         )
 
-        tv = browser.new_page(viewport={"width": 1280, "height": 720})
+        tv = browser.new_page(viewport={"width": 1280, "height": 720}, ignore_https_errors=True)
         tv.goto("http://localhost:3001", timeout=90000)
         tv.click("text=Abrir uma Jam nesta tela")
         tv.wait_for_url(re.compile(r"/session/\d{4}"), timeout=30000)
         code = tv.url.rstrip("/").split("/")[-1]
         print("jam criada:", code)
 
-        phone = browser.new_page(viewport={"width": 390, "height": 844})
-        phone.goto(f"http://localhost:3002/?code={code}", timeout=90000)
+        phone = browser.new_page(viewport={"width": 390, "height": 844}, ignore_https_errors=True)
+        phone.goto(f"https://localhost:3002/?code={code}", timeout=90000)
         phone.fill("input[placeholder='Como te chamam?']", "Dani")
         phone.click("text=Entrar na Jam")
         phone.wait_for_selector("text=Adicionar música", timeout=15000)

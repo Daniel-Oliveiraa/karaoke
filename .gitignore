@@ -13,6 +13,9 @@ __pycache__/
 *.pyc
 .venv/
 
+# certificados locais de desenvolvimento
+certs/
+
 # ambiente e editor
 .env*
 .DS_Store

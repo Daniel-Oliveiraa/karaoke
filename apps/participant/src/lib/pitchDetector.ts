@@ -133,6 +133,9 @@ let workletUrl: string | null = null;
 export async function startPitchCapture(
   onFrame: (frame: PitchFrame) => void
 ): Promise<PitchCapture> {
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    throw new Error("insecure-context");
+  }
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: {
       echoCancellation: false, // preserva a voz crua para o detector

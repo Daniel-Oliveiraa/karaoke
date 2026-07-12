@@ -9,7 +9,7 @@ import type {
 export type JamSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
 export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
+  process.env.NEXT_PUBLIC_API_URL ?? "https://localhost:4001";
 
 let socket: JamSocket | null = null;
 
