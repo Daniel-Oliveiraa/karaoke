@@ -89,9 +89,12 @@ const requestHandler = (req: IncomingMessage, res: ServerResponse) => {
       return;
     }
     const type =
-      { ".mp3": "audio/mpeg", ".wav": "audio/wav", ".json": "application/json" }[
-        extname(name).toLowerCase()
-      ] ?? "application/octet-stream";
+      {
+        ".mp3": "audio/mpeg",
+        ".ogg": "audio/ogg",
+        ".wav": "audio/wav",
+        ".json": "application/json",
+      }[extname(name).toLowerCase()] ?? "application/octet-stream";
     const range = req.headers.range;
     const match = range ? /^bytes=(\d*)-(\d*)$/.exec(range) : null;
     if (match && (match[1] || match[2])) {
