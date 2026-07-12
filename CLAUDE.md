@@ -102,6 +102,15 @@ catálogo B2B + ECAD (Seção 1 do plano).
 - **Fluxo da TV é autônomo**: countdown de 5s inicia a próxima da fila, resultado fica 8s e volta.
   A TV é "um palco" (sem interação); o controle remoto do anfitrião virá com o dashboard.
 - **Sem auth ainda**: qualquer um cria Jam. Auth entra junto com o dashboard do anfitrião.
+- **"Voz na TV" (protótipo, 2026-07-12)**: toggle experimental no SingView transmite a voz do
+  cantor por WebRTC P2P para a TV (celular como microfone). Otimizações: captura crua,
+  ptime=10, jitterBufferTarget=0, saída WebAudio "interactive" + reverb curto (mascara o
+  atraso residual como efeito). Medidor de latência estimada na TV. Sinalização via Socket.io
+  (`participant:mic_signal`/`host:mic_signal`/`jam:mic_signal`); servidor só retransmite e só
+  aceita o cantor da vez. Arquivos: `apps/participant/src/lib/tvMic.ts`,
+  `apps/host/src/lib/micReceiver.ts`. Teste: `python scripts/test-tv-mic.py`. **Pendente de
+  validação em hardware real** (headless estima ~135ms; expectativa em LAN 5GHz + som por
+  HDMI: 60–90ms). Se não ficar bom, o caminho premium segue sendo mic dedicado (Fase 4).
 
 ## 3. O que NÃO foi feito (pendências conhecidas)
 - `apps/admin` (CRUD de catálogo, gestão de licenciamento, monitor de jams) — pasta vazia.
