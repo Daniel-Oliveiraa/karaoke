@@ -90,12 +90,19 @@ de pitch → segmentação em `MelodyNote[]` → faster-whisper gera a letra sin
 `apps/api/media/<id>.json` + `<id>.mp3`. A API carrega tudo de `apps/api/media/` na
 inicialização e serve os áudios em `/media/*` (com Range). A TV toca o instrumental real
 (`song.audioUrl`) em vez do synth e reancora o relógio do score via `host:playback_started`.
-**Já processadas**: "Knock" e "Orbit" (Josh Woodward, **CC BY 4.0** — atribuição obrigatória,
-campo `attribution`; fonte: Internet Archive, itens `pandacd-706-addressed-to-the-stars` e
-`cover_Josh_Woodward_-_Addressed_to_the_Stars`, o álbum inteiro tem 14 faixas com par
-vocal+instrumental oficial). Dependências Python: `pip install -r services/audio-processing/requirements.txt`
-(torch CPU já instalado nesta máquina). **Só processar áudio licenciado** — para uso comercial,
-catálogo B2B + ECAD (Seção 1 do plano).
+**Importador UltraStar** (`services/audio-processing/ultrastar.py`): converte arquivos
+UltraStar `.txt` (padrão dos jogos de karaokê com pontuação por voz) direto para o formato
+`Song` — melodia com tom exato + letra por sílaba, sem Demucs/Whisper. `--strip-vocals`
+opcional gera instrumental. `batch_ultrastar_cc.py` importa o repositório oficial
+UltraStar-Deluxe/songs (39 pacotes CC).
+**Catálogo atual: 58 músicas (53 com áudio real)** — 14 Josh Woodward (CC BY 4.0, via
+pipeline Demucs+pyin+Whisper) + 39 UltraStar CC (Jonathan Coulton etc. — **vários são
+CC BY-NC, não comercial**: revisar license.txt de cada pacote antes de qualquer lançamento)
++ 5 cantigas demo synth. Dependências Python:
+`pip install -r services/audio-processing/requirements.txt` (torch CPU já instalado).
+**Só processar áudio licenciado** — música comercial popular exige catálogo B2B + ECAD
+(Seção 1 do plano); bancos UltraStar comunitários de hits comerciais são transcrições sem
+licença e NÃO devem ser importados em massa no produto.
 
 ### Decisões técnicas do MVP da Jam (e o upgrade path de cada uma)
 - **Backend**: Node puro + Socket.io (não NestJS como no plano — menos boilerplate para o MVP).
