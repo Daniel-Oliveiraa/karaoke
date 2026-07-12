@@ -2,6 +2,7 @@
 
 import { PitchMeter, ProgressBar } from "@jamroom/ui";
 import type { Jam, LivePitch, Song } from "@jamroom/shared-types";
+import type { MicStats } from "@/lib/micReceiver";
 
 /**
  * Player — música em andamento. "A TV é um palco": letra protagonista,
@@ -13,12 +14,14 @@ export function PlayerView({
   time,
   pitch,
   songsById,
+  micStats,
 }: {
   jam: Jam;
   song: Song;
   time: number;
   pitch: LivePitch | null;
   songsById: Map<string, Song>;
+  micStats?: MicStats | null;
 }) {
   const item = jam.queue.find((i) => i.id === jam.currentItemId);
   const singer = jam.participants.find((p) => p.id === item?.participantId);
@@ -48,6 +51,24 @@ export function PlayerView({
           "radial-gradient(120% 90% at 75% 10%, rgba(124,58,237,0.4), transparent 55%), radial-gradient(90% 70% at 20% 100%, rgba(59,130,246,0.25), transparent 60%), #09090B",
       }}
     >
+      {/* medidor do protótipo "voz na TV" */}
+      {micStats && (
+        <div className="absolute left-1/2 top-4 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/10 bg-background/70 px-4 py-1.5 backdrop-blur-glass">
+          <span
+            className={`inline-block h-2 w-2 rounded-full ${
+              micStats.connected ? "bg-success" : "bg-warning animate-pulse"
+            }`}
+          />
+          <span className="text-caption font-semibold text-foreground">
+            Voz na TV · ~{micStats.totalMs} ms
+          </span>
+          <span className="text-caption text-foreground-muted">
+            (rede {micStats.networkMs} · buffer {micStats.jitterBufferMs} · saída{" "}
+            {micStats.outputMs})
+          </span>
+        </div>
+      )}
+
       {/* cantor atual */}
       <header className="flex items-start justify-between p-12">
         <div>

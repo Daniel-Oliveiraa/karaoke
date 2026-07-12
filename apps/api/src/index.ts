@@ -297,6 +297,24 @@ io.on("connection", (socket: JamSocket) => {
     });
   });
 
+  // ------------------------------------------- "voz na TV" (relay WebRTC)
+  socket.on("participant:mic_signal", (data) => {
+    const { code, participantId } = socket.data;
+    if (socket.data.role !== "participant" || !code || !participantId) return;
+    const record = getJam(code);
+    if (!record || record.jam.status !== "playing") return;
+    const item = currentItem(record.jam);
+    if (!item || item.participantId !== participantId) return; // só o cantor da vez
+    socket.to(code).emit("jam:mic_signal", { participantId, data });
+  });
+
+  socket.on("host:mic_signal", (participantId, data) => {
+    const code = socket.data.code;
+    if (socket.data.role !== "host" || !code) return;
+    if (!getJam(code)) return;
+    socket.to(code).emit("jam:mic_signal", { participantId, data });
+  });
+
   // ------------------------------------------------------------- desconexão
   socket.on("disconnect", () => {
     const { role, code, participantId } = socket.data;

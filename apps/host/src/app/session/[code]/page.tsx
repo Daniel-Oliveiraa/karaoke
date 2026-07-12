@@ -7,6 +7,7 @@ import { EndedView } from "@/components/EndedView";
 import { LobbyView } from "@/components/LobbyView";
 import { PlayerView } from "@/components/PlayerView";
 import { ResultsView } from "@/components/ResultsView";
+import { createMicReceiver, type MicStats } from "@/lib/micReceiver";
 import { API_URL, getSocket } from "@/lib/socket";
 import { playSong, type SynthPlayback } from "@/lib/synth";
 
@@ -32,6 +33,7 @@ export default function SessionPage({
   const [pitch, setPitch] = useState<LivePitch | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [secondsToNext, setSecondsToNext] = useState<number | null>(null);
+  const [micStats, setMicStats] = useState<MicStats | null>(null);
 
   const playbackRef = useRef<SynthPlayback | null>(null);
   const endedSentRef = useRef(false);
@@ -102,6 +104,13 @@ export default function SessionPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playingItemId, playingSongId, songs.length]);
 
+  // "voz na TV": receptor WebRTC ativo enquanto uma música toca
+  useEffect(() => {
+    if (!playingItemId) return;
+    const receiver = createMicReceiver(setMicStats);
+    return () => receiver.stop();
+  }, [playingItemId]);
+
   // lobby: contagem regressiva para a próxima da fila
   const hasQueued = Boolean(jam?.queue.some((i) => i.status === "queued"));
   const inLobby = jam?.status === "lobby";
@@ -170,7 +179,14 @@ export default function SessionPage({
     const song = songsById.get(playingSongId);
     if (song) {
       return (
-        <PlayerView jam={jam} song={song} time={time} pitch={pitch} songsById={songsById} />
+        <PlayerView
+          jam={jam}
+          song={song}
+          time={time}
+          pitch={pitch}
+          songsById={songsById}
+          micStats={micStats}
+        />
       );
     }
   }

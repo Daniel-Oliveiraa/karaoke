@@ -6,6 +6,7 @@ import type { Jam, Participant, Song } from "@jamroom/shared-types";
 import { startPitchCapture, type PitchCapture } from "@/lib/pitchDetector";
 import { ScoreTracker, type FrameJudgement } from "@/lib/scoring";
 import { getSocket } from "@/lib/socket";
+import { startTvMic, type TvMicSession } from "@/lib/tvMic";
 
 const PITCH_EMIT_INTERVAL_MS = 150;
 
@@ -29,8 +30,12 @@ export function SingView({
   const [judge, setJudge] = useState<FrameJudgement | null>(null);
   const [done, setDone] = useState(false);
 
+  const [tvMicOn, setTvMicOn] = useState(false);
+  const [tvMicBusy, setTvMicBusy] = useState(false);
+
   const trackerRef = useRef<ScoreTracker | null>(null);
   const captureRef = useRef<PitchCapture | null>(null);
+  const tvMicRef = useRef<TvMicSession | null>(null);
   const startRef = useRef<number | null>(null); // performance.now() do t=0 da música
   const sentRef = useRef(false);
   const lastEmitRef = useRef(0);
@@ -67,6 +72,8 @@ export function SingView({
           getSocket().emit("participant:score", trackerRef.current.finish());
           captureRef.current?.stop();
           captureRef.current = null;
+          tvMicRef.current?.stop();
+          tvMicRef.current = null;
           setCapturing(false);
           setDone(true);
         }
@@ -77,14 +84,35 @@ export function SingView({
     return () => cancelAnimationFrame(raf);
   }, [song.durationSec]);
 
-  // desmontagem: libera o microfone
+  // desmontagem: libera o microfone e o streaming da voz
   useEffect(
     () => () => {
       captureRef.current?.stop();
       captureRef.current = null;
+      tvMicRef.current?.stop();
+      tvMicRef.current = null;
     },
     []
   );
+
+  async function toggleTvMic() {
+    if (tvMicBusy) return;
+    if (tvMicRef.current) {
+      tvMicRef.current.stop();
+      tvMicRef.current = null;
+      setTvMicOn(false);
+      return;
+    }
+    setTvMicBusy(true);
+    try {
+      tvMicRef.current = await startTvMic(me.id);
+      setTvMicOn(true);
+    } catch {
+      setMicError("Não foi possível transmitir sua voz para a TV.");
+    } finally {
+      setTvMicBusy(false);
+    }
+  }
 
   async function enableMic() {
     setMicError(null);
@@ -185,8 +213,36 @@ export function SingView({
 
             <div className="flex items-center gap-2 text-caption text-foreground-muted">
               <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-error" />
-              capturando sua voz — nada é enviado, a análise é no seu celular
+              {tvMicOn
+                ? "sua voz está saindo na TV (e o score segue no celular)"
+                : "capturando sua voz — nada é enviado, a análise é no seu celular"}
             </div>
+
+            {/* protótipo: usar o celular como microfone da TV */}
+            <button
+              type="button"
+              onClick={() => void toggleTvMic()}
+              disabled={tvMicBusy}
+              className={`flex items-center gap-3 rounded-md border px-4 py-3 text-caption font-semibold transition-colors ${
+                tvMicOn
+                  ? "border-primary/60 bg-primary/15 text-primary"
+                  : "border-border bg-surface text-foreground-muted"
+              } disabled:opacity-50`}
+            >
+              <span
+                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                  tvMicOn ? "bg-primary" : "bg-surface-elevated"
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+                    tvMicOn ? "translate-x-4" : "translate-x-0.5"
+                  }`}
+                />
+              </span>
+              🔊 Voz na TV {tvMicOn ? "ligada" : "desligada"}
+              <span className="font-normal">(experimental)</span>
+            </button>
           </>
         )}
       </section>

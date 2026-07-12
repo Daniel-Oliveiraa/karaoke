@@ -132,6 +132,20 @@ export interface LivePitch {
 }
 
 // ---------------------------------------------------------------------------
+// "Voz na TV" — sinalização WebRTC (celular como microfone da tela host)
+// ---------------------------------------------------------------------------
+
+/**
+ * Payload de sinalização WebRTC retransmitido pelo servidor (SDP ou ICE).
+ * O servidor não interpreta o conteúdo — só encaminha entre o cantor da vez
+ * e o host da mesma Jam.
+ */
+export interface MicSignalData {
+  description?: { type: "offer" | "answer"; sdp: string };
+  candidate?: unknown;
+}
+
+// ---------------------------------------------------------------------------
 // Protocolo Socket.io
 // ---------------------------------------------------------------------------
 
@@ -187,6 +201,11 @@ export interface ClientToServerEvents {
     result: Pick<ScoreResult, "score" | "accuracy" | "notesHit" | "notesTotal">
   ) => void;
 
+  /** Sinalização WebRTC do cantor → host ("voz na TV"). */
+  "participant:mic_signal": (data: MicSignalData) => void;
+  /** Sinalização WebRTC do host → um participante específico. */
+  "host:mic_signal": (participantId: string, data: MicSignalData) => void;
+
   /** Catálogo de músicas (com letra + melodia). */
   "catalog:get": (cb: (songs: Song[]) => void) => void;
 }
@@ -199,6 +218,15 @@ export interface ServerToClientEvents {
   "jam:pitch": (sample: LivePitch) => void;
   /** A Jam foi encerrada pelo host. */
   "jam:ended": (jam: Jam) => void;
+  /**
+   * Sinalização WebRTC retransmitida. No host, `participantId` identifica o
+   * cantor de origem; no participante, indica o destinatário (ignorar se
+   * não for o próprio id).
+   */
+  "jam:mic_signal": (payload: {
+    participantId: string;
+    data: MicSignalData;
+  }) => void;
 }
 
 // ---------------------------------------------------------------------------
