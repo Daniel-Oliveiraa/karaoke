@@ -115,15 +115,19 @@ catálogo B2B + ECAD (Seção 1 do plano).
 - **Fluxo da TV é autônomo**: countdown de 5s inicia a próxima da fila, resultado fica 8s e volta.
   A TV é "um palco" (sem interação); o controle remoto do anfitrião virá com o dashboard.
 - **Sem auth ainda**: qualquer um cria Jam. Auth entra junto com o dashboard do anfitrião.
-- **"Voz na TV" (protótipo, 2026-07-12)**: toggle experimental no SingView transmite a voz do
-  cantor por WebRTC P2P para a TV (celular como microfone). Otimizações: captura crua,
-  ptime=10, jitterBufferTarget=0, saída WebAudio "interactive" + reverb curto (mascara o
-  atraso residual como efeito). Medidor de latência estimada na TV. Sinalização via Socket.io
-  (`participant:mic_signal`/`host:mic_signal`/`jam:mic_signal`); servidor só retransmite e só
-  aceita o cantor da vez. Arquivos: `apps/participant/src/lib/tvMic.ts`,
-  `apps/host/src/lib/micReceiver.ts`. Teste: `python scripts/test-tv-mic.py`. **Pendente de
-  validação em hardware real** (headless estima ~135ms; expectativa em LAN 5GHz + som por
-  HDMI: 60–90ms). Se não ficar bom, o caminho premium segue sendo mic dedicado (Fase 4).
+- **"Voz na TV" (protótipo v2, 2026-07-12)**: toggle experimental no SingView transmite a voz
+  do cantor para a TV (celular como microfone). v1 usava track Opus do WebRTC — o jitter
+  buffer NetEq do Chrome tem piso de ~40–80ms e o usuário mediu >150ms em hardware real.
+  v2 fura esse piso: **PCM Int16 cru em pacotes de 8ms via RTCDataChannel não-confiável/
+  não-ordenado**, playback na TV por AudioWorklet com **ring buffer próprio de 30ms**
+  (resampling linear entre taxas; excesso descartado — atraso nunca acumula; underrun
+  reacumula até o alvo). Captura crua no celular, saída WebAudio "interactive" + reverb
+  curto (mascara o residual). Medidor na TV mostra números medidos (buffer real + RTT/2 +
+  saída). Sinalização via Socket.io (mesmos eventos mic_signal). Arquivos:
+  `apps/participant/src/lib/tvMic.ts`, `apps/host/src/lib/micReceiver.ts`. Teste:
+  `python scripts/test-tv-mic.py` (headless: estável 57–87ms). Fatores fora do código que
+  dominam a latência real: caixa Bluetooth (+100–300ms — usar HDMI/cabo), "modo jogo" da TV
+  (TVs processam áudio, 20–100ms), Wi-Fi 5GHz. Mic dedicado (Fase 4) segue sendo o premium.
 
 ## 3. O que NÃO foi feito (pendências conhecidas)
 - `apps/admin` (CRUD de catálogo, gestão de licenciamento, monitor de jams) — pasta vazia.
