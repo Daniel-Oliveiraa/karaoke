@@ -106,8 +106,12 @@ licença e NÃO devem ser importados em massa no produto.
 
 ### Decisões técnicas do MVP da Jam (e o upgrade path de cada uma)
 - **Backend**: Node puro + Socket.io (não NestJS como no plano — menos boilerplate para o MVP).
-  Estado **em memória** (`apps/api/src/store.ts`); migrar para Redis (fila/leaderboard/presença)
-  + Postgres (histórico) sem mudar o protocolo de `@jamroom/shared-types`.
+  Estado em memória com **snapshot em `apps/api/data/jams.json`** (`store.ts`): jams sobrevivem
+  a restart da API (música tocando volta para a fila no boot; jams >24h descartadas). Sessão do
+  participante persiste em localStorage no celular + rejoin. Migrar para Redis/Postgres sem
+  mudar o protocolo de `@jamroom/shared-types`. Testes: `scripts/test-persistence.mjs`.
+- **Pular/cancelar**: `host:skip_song` (botão na TV), `participant:skip_song` (cantor desiste)
+  e `participant:remove_song` (✕ nos itens próprios da fila) — pular não pontua.
 - **Catálogo híbrido**: 5 cantigas demo (grade MIDI hardcoded em `apps/api/src/catalog.ts`,
   playback sintetizado) + músicas reais processadas pelo pipeline em `apps/api/media/*.json`
   (playback de instrumental MP3 real). O mesmo formato `Song` cobre os dois casos — a
