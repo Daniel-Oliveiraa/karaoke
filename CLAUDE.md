@@ -38,14 +38,14 @@ Monorepo npm workspaces (sem Turborepo — decisão pragmática; reavaliar se o 
 | Pasta | Papel | Status |
 |---|---|---|
 | `apps/web` | Site institucional (Next.js 16, porta 3000) | **Completo**: Hero, FeaturesBar, Como funciona, Demonstração, Planos, FAQ, Footer |
-| `apps/api` | Backend da Jam — Node + Socket.io (porta 4001) | **Funcional (MVP)**: sessões, fila, leaderboard, relay de pitch, catálogo demo. Estado em memória |
-| `apps/host` | Tela TV — Next.js (porta 3001) | **Funcional**: lobby com código+QR, player com letra sincronizada + melodia sintetizada, resultado, leaderboard, encerramento |
-| `apps/participant` | Mobile-web do participante — Next.js (porta 3002) | **Funcional**: entrar por código/QR, nome, fila, adicionar música, "sua vez" com mic + pitch detection + score real, resultado, ranking |
+| `apps/api` | Backend da Jam — Node + Socket.io, HTTPS (porta 4001) | **Funcional**: sessões, fila, leaderboard, relay de pitch e de sinalização WebRTC, skip, catálogo de 58 músicas, snapshot em disco (sobrevive a restart) |
+| `apps/host` | Tela TV — Next.js (porta 3001, HTTP) | **Funcional**: lobby com código+QR, player com áudio real (ou synth p/ demos) + letra sincronizada, "voz na TV" (receptor + medidor de latência), pular música, resultado, leaderboard, encerramento |
+| `apps/participant` | Mobile-web — Next.js (porta 3002, HTTPS) | **Funcional**: entrar por código/QR, sessão persistente (localStorage + rejoin), fila com remoção, "sua vez" com mic + score real, toggle "voz na TV" com nível, desistir da música, resultado, ranking |
 | `apps/admin` | Painel admin | **Vazio** — não iniciado |
 | `packages/shared-types` | Contratos: Song, Jam, QueueItem, PitchCurve, ScoreResult, eventos socket | **Completo** — fonte única do protocolo |
-| `packages/ui` | `@jamroom/ui`: Button, Card, Badge, Avatar, cn | **Base pronta** — faltam Input, Modal, Toast, Table etc. |
+| `packages/ui` | `@jamroom/ui`: Button, Card, Badge, Avatar, PitchMeter, ProgressBar, cn | **Base pronta** — faltam Input, Modal, Toast, Table etc. |
 | `packages/config` | `@jamroom/config`: preset Tailwind (tokens) + tsconfig base | **Completo** |
-| `services/audio-processing` | Pipeline Python: Demucs + pyin + faster-whisper | **Funcional** — ver README do serviço; já processou 2 músicas reais |
+| `services/audio-processing` | Ingestão: pipeline IA (Demucs+pyin+Whisper) + importador UltraStar | **Funcional** — 53 músicas reais processadas; ver README do serviço |
 
 ### Como rodar (4 processos)
 ```bash
@@ -75,13 +75,16 @@ inbound TCP 3001/3002/4001 (perfil Privado). IP atual configurado: 192.168.15.14
 
 ### Testes (executar após mudanças no protocolo/scoring)
 ```bash
-node scripts/test-protocol.mjs     # protocolo socket completo (API precisa estar de pé)
-npx tsx scripts/test-scoring.ts    # algoritmo de score com performances sintéticas
-python scripts/test-jam-flow.py    # fluxo real em navegador (api+host+participant de pé; Playwright)
-python scripts/test-real-song.py   # música real: áudio na TV + letra Whisper + mic (não espera a música toda)
+node scripts/test-protocol.mjs             # protocolo socket completo, incl. skip/remove (API de pé)
+node scripts/test-persistence.mjs create   # + kill/restart da API + `verify <code> <pid>`: snapshot
+npx tsx scripts/test-scoring.ts            # algoritmo de score com performances sintéticas
+python scripts/test-jam-flow.py            # fluxo completo em navegador (Playwright, mic fake)
+python scripts/test-real-song.py           # música real: áudio na TV + letra sincronizada + mic
+python scripts/test-tv-mic.py              # voz na TV: conexão, pacotes PCM fluindo, som tocando
+python scripts/test-session-persistence.py # sessão do celular sobrevive a fechar o navegador
 ```
-Última execução completa: 2026-07-11, tudo verde (score real validado: cantor perfeito=1000,
-oitava acima=1000, desafinado 3 semitons=242, mudo=0; mic fake do Chromium → 21 pts, coerente).
+Última execução completa: 2026-07-12, tudo verde. Score real validado (perfeito=1000, oitava
+acima=1000, desafinado 3 semitons=242, mudo=0); voz na TV validada em hardware real pelo usuário.
 
 ### Músicas reais (pipeline de ingestão)
 `services/audio-processing/pipeline.py` (ver README do serviço): entrada = gravação original
@@ -93,8 +96,11 @@ inicialização e serve os áudios em `/media/*` (com Range). A TV toca o instru
 **Importador UltraStar** (`services/audio-processing/ultrastar.py`): converte arquivos
 UltraStar `.txt` (padrão dos jogos de karaokê com pontuação por voz) direto para o formato
 `Song` — melodia com tom exato + letra por sílaba, sem Demucs/Whisper. `--strip-vocals`
-opcional gera instrumental. `batch_ultrastar_cc.py` importa o repositório oficial
-UltraStar-Deluxe/songs (39 pacotes CC).
+opcional gera instrumental via Demucs (timing idêntico ao mapa, ao contrário de um
+instrumental de outra fonte). `batch_ultrastar_cc.py` importa o repositório oficial
+UltraStar-Deluxe/songs (39 pacotes CC). `batch_local.py [--strip-vocals]` importa pacotes
+locais de `input/ultrastar/` (uma pasta por música: .txt + áudio) — fluxo do usuário para
+estudo pessoal em casa; itens entram marcados como não licenciados para uso comercial.
 **Catálogo atual: 58 músicas (53 com áudio real)** — 14 Josh Woodward (CC BY 4.0, via
 pipeline Demucs+pyin+Whisper) + 39 UltraStar CC (Jonathan Coulton etc. — **vários são
 CC BY-NC, não comercial**: revisar license.txt de cada pacote antes de qualquer lançamento)
@@ -145,13 +151,15 @@ licença e NÃO devem ser importados em massa no produto.
 - Dashboard do Anfitrião (conta, criar Jam a partir do dashboard, controle remoto da Jam,
   histórico/relatórios) — não existe; hoje a própria tela da TV cria a sessão.
 - Autenticação (admin/anfitrião) — não existe.
-- Persistência (Postgres/Redis) — estado em memória; reiniciou a API, perdeu as jams.
+- Persistência "de verdade" (Postgres/Redis) — hoje é snapshot JSON em arquivo, suficiente
+  para o MVP mas não para múltiplas instâncias.
 - **Pagamentos/monetização (Fase 3) — explicitamente adiado a pedido do usuário (2026-07-11).**
 - Catálogo B2B licenciado — a negociação com fornecedor segue sendo o gargalo de lead time.
-  O pipeline técnico de ingestão **já existe e funciona** (2 músicas CC processadas).
+  O pipeline técnico de ingestão **já existe e funciona** (53 músicas processadas).
 - Vídeo no player (hoje: áudio real + fundo gradiente para músicas reais; synth para demos).
-- Letra sincronizada por palavra/sílaba (hoje é por linha, via segmentos do Whisper).
-- Repositório git **não inicializado**.
+- Highlight de letra por palavra/sílaba na TV (os dados por sílaba JÁ existem nas músicas
+  UltraStar — falta só a UI; músicas do pipeline IA têm granularidade de linha).
+- Repositório git **local apenas** — sem remote (GitHub) configurado ainda.
 
 ## 4. Design System — regras obrigatórias para qualquer UI nova
 
@@ -167,30 +175,31 @@ Fonte completa: `docs/layoutDesc_extracted.txt`. Tokens em `packages/config/tail
   fixo); Admin = Linear/GitHub/Vercel (denso, tabular).
 - Reaproveitar `@jamroom/ui` + preset em qualquer app novo (ver `apps/*/tailwind.config.js`).
 
-## 5. Roadmap (estado em 2026-07-11)
+## 5. Roadmap (estado em 2026-07-12)
 
-- **Fase 0 — Fundações**: parcial. Feito: landing completa, design system, monorepo. Pendente:
-  auth, admin, pipeline. A negociação B2B segue sendo o item de maior lead time.
-- **Fase 1 — Jam/Party core**: **FEITA** (código/QR, fila em tempo real, tela host, leaderboard).
-- **Fase 2 — Scoring real por pitch**: **FEITA**, incluindo o pipeline de ingestão
-  (Demucs + pyin + Whisper) com 2 músicas reais processadas. Pendente: testes em ambiente
-  ruidoso de verdade e feature flag score simulado/real por sessão.
+- **Fase 0 — Fundações**: parcial. Feito: landing completa, design system, monorepo, git local.
+  Pendente: auth, admin. A negociação B2B segue sendo o item de maior lead time.
+- **Fase 1 — Jam/Party core**: **FEITA** (código/QR, fila em tempo real com remoção/skip, tela
+  host, leaderboard, sessões persistentes em ambos os lados).
+- **Fase 2 — Scoring real por pitch**: **FEITA**, incluindo os dois caminhos de ingestão
+  (pipeline IA e importador UltraStar) com 53 músicas reais. **Validada pelo usuário com
+  microfone e rede reais.** Pendente: calibração fina em ambiente ruidoso (festa) e feature
+  flag score simulado/real por sessão.
+- **Extra (fora do plano original)**: "voz na TV" — celular como microfone via WebRTC/PCM,
+  latência validada em hardware real pelo usuário.
 - **Fase 3 — Monetização**: **adiada a pedido do usuário**.
 - **Fase 4 — Locação de equipamentos**: fora do escopo.
 
 ### Próximos passos recomendados
-1. Testar a Jam com microfone real (a validação automatizada usou o fake device do Chromium) e
-   calibrar tolerâncias do scoring (`CLARITY_MIN`, limiares de hit) com voz de verdade —
-   agora dá para cantar "Knock"/"Orbit" com áudio real.
-2. `git init` + primeiro commit (não há controle de versão!). Considerar gitignore para
-   `apps/api/media/` e `services/audio-processing/input/` (arquivos de áudio grandes).
-3. Processar as outras 12 faixas do álbum CC do Josh Woodward (comando no README do serviço;
-   ~3 min/faixa em CPU) para encher o catálogo de teste.
-4. Dashboard do Anfitrião + auth (destrava o fluxo de produto real: conta → criar Jam → TV).
-5. `apps/admin` com CRUD de catálogo simples (prepara a entrada do catálogo licenciado).
-6. Persistência (Redis para estado vivo, Postgres para histórico) atrás do `store.ts` atual.
-7. Extrair componentes repetidos das três apps (barra de afinação, leaderboard, tabs) para
-   `@jamroom/ui`.
+1. Highlight de letra por sílaba na TV (dados já existem nas músicas UltraStar — só UI).
+2. Dashboard do Anfitrião + auth (destrava o fluxo de produto real: conta → criar Jam → TV;
+   inclui o controle remoto da Jam que hoje está espalhado entre TV e celular do cantor).
+3. `apps/admin` com CRUD de catálogo simples (prepara a entrada do catálogo licenciado).
+4. Criar remote no GitHub e fazer push (repo é só local).
+5. Persistência real (Redis para estado vivo, Postgres para histórico) atrás do `store.ts`.
+6. Calibrar scoring em festa de verdade (ruído, várias vozes) e ajustar `CLARITY_MIN`/limiares.
+7. Retomar a frente comercial: fornecedores B2B de catálogo (o importador já fala UltraStar,
+   e o pipeline IA cobre qualquer par áudio original + instrumental).
 
 ## 6. Convenções observadas (seguir ao continuar)
 - Nome do produto: **JAMROOM** (pacotes `@jamroom/*`). Copy de produto e comentários em pt-BR;
@@ -204,3 +213,8 @@ Fonte completa: `docs/layoutDesc_extracted.txt`. Tokens em `packages/config/tail
 - Typecheck por app: `npx tsc --noEmit` dentro de `apps/api`, `apps/host`, `apps/participant`.
 - Screenshots de verificação visual ficam em `C:\Users\danie\AppData\Local\Temp\claude\karaoke-shots`
   (scripts `shot_landing.py`/`shot_viewport.py` lá; testes oficiais em `scripts/`).
+- Lições de WebRTC/áudio que custaram debugging (não repetir): candidatos ICE precisam de fila
+  até a descrição remota aplicar; Android entrega silêncio numa 2ª captura simultânea do mic
+  (compartilhar o MediaStream); AudioContext criado sem gesto nasce suspenso (retomar em
+  clique + avisar na UI); assets de dev do Next 16 bloqueiam acesso cross-origin
+  (`allowedDevOrigins`); getUserMedia exige HTTPS fora de localhost.
