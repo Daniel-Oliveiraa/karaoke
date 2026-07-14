@@ -44,6 +44,29 @@ export default function ParticipantPage() {
       setSongs((prev) =>
         prev.some((s) => s.id === song.id) ? prev : [song, ...prev]
       );
+    // A API pode reiniciar no meio da Jam (o snapshot dela sobrevive, mas a
+    // conexão perde o "quem sou eu" no servidor): ao reconectar, refaz o
+    // rejoin — senão a aba fica viva porém surda/muda, sem nenhum erro.
+    const onReconnect = () => {
+      const saved = localStorage.getItem(SESSION_KEY);
+      if (!saved) return;
+      try {
+        const { code, participantId } = JSON.parse(saved) as {
+          code: string;
+          participantId: string;
+        };
+        socket.emit("participant:rejoin", { code, participantId }, (res) => {
+          if (res.ok && res.jam && res.participant) {
+            setJam(res.jam);
+            setMeId(res.participant.id);
+          }
+        });
+      } catch {
+        // sessão corrompida — o fluxo normal de join cuida disso
+      }
+    };
+    socket.io.on("reconnect", onReconnect);
+
     socket.on("jam:state", onState);
     socket.on("jam:ended", onState);
     socket.on("catalog:new_song", onNewSong);
@@ -91,6 +114,7 @@ export default function ParticipantPage() {
 
     return () => {
       clearTimeout(failsafe);
+      socket.io.off("reconnect", onReconnect);
       socket.off("jam:state", onState);
       socket.off("jam:ended", onState);
       socket.off("catalog:new_song", onNewSong);

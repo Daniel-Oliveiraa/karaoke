@@ -61,11 +61,22 @@ export default function SessionPage({
       setSongs((prev) =>
         prev.some((s) => s.id === song.id) ? prev : [song, ...prev]
       );
+    // API reiniciou no meio da Jam: a conexão volta sozinha, mas o servidor
+    // esqueceu que este socket é o host — refaz o attach (senão a TV fica
+    // sem receber estado nem sinalização de voz, sem nenhum erro visível)
+    const onReconnect = () => {
+      socket.emit("host:attach", code, (res) => {
+        if (res.ok && res.jam) setJam(res.jam);
+      });
+    };
+    socket.io.on("reconnect", onReconnect);
+
     socket.on("jam:state", onState);
     socket.on("jam:pitch", onPitch);
     socket.on("jam:ended", onState);
     socket.on("catalog:new_song", onNewSong);
     return () => {
+      socket.io.off("reconnect", onReconnect);
       socket.off("jam:state", onState);
       socket.off("jam:pitch", onPitch);
       socket.off("jam:ended", onState);
