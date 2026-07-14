@@ -97,7 +97,8 @@ let running: ImportJob | null = null;
 
 export function requestImport(
   videoId: string,
-  title: string
+  title: string,
+  requesterId: string
 ): { ok: boolean; error?: string } {
   if (!/^[\w-]{5,20}$/.test(videoId)) {
     return { ok: false, error: "vídeo inválido" };
@@ -116,11 +117,64 @@ export function requestImport(
     videoId,
     title: title.slice(0, 120),
     status: "queued",
+    requesterId,
+    progress: 0,
+    stage: "Na fila",
   };
   queue.push(job);
   onUpdate(job);
   runNext();
   return { ok: true };
+}
+
+/**
+ * Estágios conhecidos da saída de batch_youtube.py/pipeline.py, em ordem
+ * cronológica — o progresso só sobe (nunca desce) conforme o marcador mais
+ * avançado encontrado na saída acumulada do processo.
+ */
+const STAGES: { marker: RegExp; stage: string; progress: number }[] = [
+  { marker: /baixando audio/i, stage: "Baixando áudio", progress: 5 },
+  { marker: /mp3 em cache/i, stage: "Áudio em cache", progress: 15 },
+  { marker: /\[1\/4\] Demucs separando vocal/, stage: "Removendo a voz (Demucs)", progress: 20 },
+  { marker: /\[2\/4\] Extraindo curva de pitch/, stage: "Extraindo a melodia", progress: 60 },
+  { marker: /\[3\/4\] Segmentando a curva/, stage: "Mapeando as notas", progress: 75 },
+  {
+    marker: /\[4\/4\] (Buscando letra sincronizada|Transcrevendo a letra)/,
+    stage: "Sincronizando a letra",
+    progress: 85,
+  },
+  { marker: /^OK: /m, stage: "Finalizando", progress: 97 },
+];
+
+/**
+ * Varre a saída acumulada do processo por marcadores de estágio conhecidos e
+ * atualiza `job` in-place. Retorna true se algo mudou (para disparar
+ * onUpdate). Não tenta parsear a barra tqdm interna do Demucs (frágil) — o
+ * client compensa a espera longa nesse estágio com uma animação de pulso.
+ */
+function detectProgress(buffer: string, job: ImportJob): boolean {
+  let changed = false;
+  for (const s of STAGES) {
+    if (job.progress < s.progress && s.marker.test(buffer)) {
+      job.stage = s.stage;
+      job.progress = s.progress;
+      changed = true;
+    }
+  }
+  // refina o download (0–15%) interpolando o "[download] NN.N%" do yt-dlp
+  if (job.progress <= 15) {
+    const matches = [...buffer.matchAll(/\[download\]\s+([\d.]+)%/g)];
+    const last = matches.at(-1);
+    if (last) {
+      const pct = Math.min(15, 5 + Math.round(parseFloat(last[1]!) * 0.1));
+      if (pct > job.progress) {
+        job.progress = pct;
+        job.stage = "Baixando áudio";
+        changed = true;
+      }
+    }
+  }
+  return changed;
 }
 
 function finish(job: ImportJob, status: "done" | "failed", extra?: Partial<ImportJob>) {
@@ -135,6 +189,8 @@ function runNext(): void {
   const job = queue.shift()!;
   running = job;
   job.status = "processing";
+  job.stage = "Preparando...";
+  job.progress = 2;
   onUpdate(job);
 
   const url = `https://www.youtube.com/watch?v=${job.videoId}`;
@@ -146,26 +202,30 @@ function runNext(): void {
   const grab = (d: Buffer) => {
     out += d.toString("utf-8");
     if (out.length > 200_000) out = out.slice(-100_000);
+    if (detectProgress(out, job)) onUpdate(job);
   };
   proc.stdout.on("data", grab);
   proc.stderr.on("data", grab);
-  proc.on("error", (err) => finish(job, "failed", { error: String(err) }));
+  proc.on("error", (err) => finish(job, "failed", { error: String(err), stage: "Falhou" }));
   proc.on("close", (code) => {
     // batch_youtube imprime "RESULT <slug> ok|skip" por música processada
     const m = /RESULT (\S+) (ok|skip)/.exec(out);
     if (!m) {
       console.warn(`[importer] job ${job.videoId} falhou (exit ${code}):\n${out.slice(-800)}`);
-      finish(job, "failed", { error: "processamento falhou — veja o log da API" });
+      finish(job, "failed", {
+        error: "processamento falhou — veja o log da API",
+        stage: "Falhou",
+      });
       return;
     }
     const slug = m[1]!;
     const wasNew = !getSong(slug);
     const song = addProcessedSong(slug);
     if (!song) {
-      finish(job, "failed", { error: "música processada mas inválida" });
+      finish(job, "failed", { error: "música processada mas inválida", stage: "Falhou" });
       return;
     }
     if (wasNew) onNewSong(song);
-    finish(job, "done", { songId: song.id });
+    finish(job, "done", { songId: song.id, progress: 100, stage: "Concluído" });
   });
 }

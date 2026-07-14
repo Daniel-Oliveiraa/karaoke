@@ -38,9 +38,12 @@ if (!results.length) fail("busca vazia");
 const pick = results[0];
 console.log(`importando: ${pick.title} (${pick.videoId}, ${pick.durationSec}s)`);
 
+const seenStages = new Set();
 socket.on("catalog:import_update", (job) => {
-  if (job.videoId === pick.videoId) console.log(`  job: ${job.status}`);
-  if (job.videoId === pick.videoId && job.status === "failed") {
+  if (job.videoId !== pick.videoId) return;
+  console.log(`  job: ${job.status} — ${job.stage} · ${job.progress}%`);
+  if (job.progress > 0) seenStages.add(job.stage);
+  if (job.status === "failed") {
     fail(`import falhou: ${job.error}`);
   }
 });
@@ -72,5 +75,12 @@ const song = await newSongPromise;
 clearTimeout(timer);
 
 if (!song?.id) fail("música sem id");
-console.log(`\nIMPORT_E2E OK — ${song.id}${song.dedupe ? " (dedupe)" : ""}`);
+if (!song.dedupe && seenStages.size < 2) {
+  fail(
+    `progresso real esperado (≥2 estágios distintos), só vi: ${[...seenStages].join(", ")}`
+  );
+}
+console.log(
+  `\nIMPORT_E2E OK — ${song.id}${song.dedupe ? " (dedupe)" : ` — estágios vistos: ${[...seenStages].join(" → ")}`}`
+);
 process.exit(0);

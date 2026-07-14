@@ -223,11 +223,12 @@ io.on("connection", (socket: JamSocket) => {
   });
 
   socket.on("catalog:import_youtube", ({ videoId, title }, cb) => {
-    if (socket.data.role !== "participant") {
+    const { role, participantId } = socket.data;
+    if (role !== "participant" || !participantId) {
       cb({ ok: false, error: "só participantes importam" });
       return;
     }
-    cb(requestImport(videoId, title ?? ""));
+    cb(requestImport(videoId, title ?? "", participantId));
   });
 
   // -------------------------------------------------------------------- host

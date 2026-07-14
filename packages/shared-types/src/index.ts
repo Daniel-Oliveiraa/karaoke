@@ -210,6 +210,12 @@ export interface ImportJob {
   /** Preenchido quando status === "done". */
   songId?: string;
   error?: string;
+  /** Quem pediu (participantId) — só ele vê o banner persistente de progresso. */
+  requesterId: string;
+  /** Progresso aproximado 0–100, detectado por estágio na saída do pipeline. */
+  progress: number;
+  /** Rótulo curto do estágio atual ("Baixando áudio", "Removendo a voz"...). */
+  stage: string;
 }
 
 // ---------------------------------------------------------------------------

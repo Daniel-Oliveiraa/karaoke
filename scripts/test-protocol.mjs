@@ -403,6 +403,13 @@ expect(
   doneJob?.status === "done" && doneJob.songId === "josh-woodward-swansong",
   "import de vídeo já processado resolveu via dedupe"
 );
+expect(
+  typeof doneJob?.progress === "number" &&
+    typeof doneJob?.stage === "string" &&
+    doneJob.progress === 100 &&
+    doneJob.requesterId === joined.participant.id,
+  "job de import expõe progress/stage/requesterId (dedupe pula direto pra 100%)"
+);
 
 // 26. host encerra
 const endedPromise = new Promise((res) => part.once("jam:ended", res));

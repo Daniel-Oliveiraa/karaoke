@@ -128,7 +128,13 @@ def main() -> None:
                 entries.append(info)
     done_ids = set(ARCHIVE.read_text().split()) if ARCHIVE.exists() else set()
     total = len(entries)
-    entries = [e for e in entries if e.get("id") not in done_ids]
+    # o atalho de processed.txt so vale a pena p/ playlists grandes (evita
+    # refetch de metadados de centenas de videos ja feitos); p/ um pedido
+    # de 1 video so (import sob demanda pelo app) sempre passa pelo loop
+    # normal, que refaz o RESULT skip/ok mesmo se ja processado — senao
+    # a API (que espera RESULT em todo pedido) fica esperando para sempre
+    if total > 1:
+        entries = [e for e in entries if e.get("id") not in done_ids]
     if args.limit:
         entries = entries[: args.limit]
     if not entries:

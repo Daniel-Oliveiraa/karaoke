@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Avatar, Badge, Button } from "@jamroom/ui";
+import { Avatar, Badge, Button, ProgressBar } from "@jamroom/ui";
 import type {
   ImportJob,
   Jam,
@@ -180,6 +180,9 @@ export function HubView({
     `${Math.floor(sec / 60)}:${String(Math.round(sec) % 60).padStart(2, "0")}`;
 
   const activeJobs = [...importJobs.values()];
+  /** Meus próprios imports em andamento — mostrados num banner persistente
+   *  fora do sheet, visível em qualquer aba (fila/ranking). */
+  const myImportJobs = activeJobs.filter((j) => j.requesterId === me.id);
 
   function toggleInvitee(id: string) {
     setSelectedInvitees((prev) =>
@@ -400,9 +403,36 @@ export function HubView({
         </div>
       )}
 
-      {/* banners fixos: convite recebido + decisão do dono */}
-      {(myInvites[0] || needsDecision) && (
+      {/* banners fixos: import em andamento + convite recebido + decisão do dono */}
+      {(myImportJobs[0] || myInvites[0] || needsDecision) && (
         <div className="fixed inset-x-5 bottom-24 z-30 flex flex-col gap-2.5">
+          {myImportJobs[0] && (
+            <div className="rounded-md border border-primary/50 bg-surface-elevated/95 p-4 backdrop-blur-glass">
+              <p className="text-caption text-foreground-muted">
+                Importando do YouTube
+              </p>
+              <p className="mt-0.5 truncate text-body font-semibold">
+                {myImportJobs[0].title}
+              </p>
+              <div className="mt-3">
+                <ProgressBar
+                  value={myImportJobs[0].progress / 100}
+                  className={
+                    myImportJobs[0].status === "processing" ? "animate-pulse" : undefined
+                  }
+                />
+              </div>
+              <p className="mt-1.5 text-caption text-foreground-muted">
+                {myImportJobs[0].stage} · {myImportJobs[0].progress}%
+              </p>
+              {myImportJobs.length > 1 && (
+                <p className="mt-1 text-caption text-foreground-muted">
+                  +{myImportJobs.length - 1} outra(s) importação(ões) sua(s) na fila
+                </p>
+              )}
+            </div>
+          )}
+
           {myInvites[0] && (
             <div className="rounded-md border border-primary/50 bg-surface-elevated/95 p-4 backdrop-blur-glass">
               <p className="text-caption text-foreground-muted">Convite para dueto</p>

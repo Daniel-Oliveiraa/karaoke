@@ -6,24 +6,36 @@
 
 ## 0. Estado ao fim de 2026-07-14 (retomar daqui)
 
-- **Git limpo, tudo commitado** (main local, sem remote). Últimos commits: fallback
-  ScriptProcessor da voz na TV, aviso de autoplay, re-attach na reconexão, catálogo v2
-  (abas + import in-app), convite pré-fila, letras LRCLIB, gêneros iTunes.
+- **Git**: mudanças desta sessão (progresso real de import + redesign da LobbyView)
+  prontas para commit — ver seção "Progresso do import" e "LobbyView" abaixo. Commits
+  anteriores do dia: fallback ScriptProcessor da voz na TV, aviso de autoplay, re-attach
+  na reconexão, catálogo v2 (abas + import in-app), convite pré-fila, letras LRCLIB,
+  gêneros iTunes.
 - **Processos que estavam de pé** (morrem se o PC reiniciar; como subir na seção 2):
   API (`npm run dev:api`, tsx watch, HTTPS 4001 + espelho HTTP 4000), participant
   (`npm run dev:participant`, dev HTTPS), host em **produção** (`next start -p 3001`,
   build com env de rede local embutida — ver seção 2), web parado.
-- **Lote do YouTube (373 músicas da playlist do usuário)**: ~338/373 concluídas, processo
-  Python DESTACADO (independe da sessão). Checar/retomar:
+  **Cuidado com processos zombie**: reruns de `tsx watch` ao longo de uma sessão longa
+  deixam supervisores órfãos acumulados (mesma porta, PIDs antigos que não morreram) —
+  se a API não refletir uma mudança de código, confira `Get-CimInstance Win32_Process
+  -Filter "Name='node.exe'"` e mate todos os `tsx.*watch src/index.ts` antes de subir de
+  novo (só um processo deve estar de pé por vez).
+- **Lote do YouTube (373 músicas da playlist do usuário)**: concluído ou muito perto
+  disso (catálogo tinha 384 músicas na última rodada de testes). Checar:
   `Get-Content services/audio-processing/input/youtube/processed.txt | Measure-Object -Line`;
-  se morreu, rodar de novo `python batch_youtube.py "<URL da playlist>"` (retoma do
-  checkpoint; URL da playlist: lista `PLx8_fGInIH4_GoDnJaVuO1P1sXGCOjhVg`). Falhas (~10,
-  vídeos indisponíveis) são retentadas automaticamente no re-run. Ao final, vale rodar
-  `python fix_lyrics.py` e `python fix_genres.py` de novo para as últimas músicas e
-  reiniciar a API.
+  se precisar retomar, `python batch_youtube.py "<URL da playlist>"` (retoma do
+  checkpoint; URL: lista `PLx8_fGInIH4_GoDnJaVuO1P1sXGCOjhVg`). Rodar `fix_lyrics.py` e
+  `fix_genres.py` de novo para as últimas músicas e reiniciar a API.
 - **Pendente de confirmação do usuário**: voz na TV na TV REAL após o fallback
   ScriptProcessor (causa raiz encontrada: AudioWorklet não existe em `http://<IP>`;
   corrigido, validado em teste automatizado nos dois contextos, faltou o ok no hardware).
+- **Bug corrigido nesta sessão**: `batch_youtube.py` com o atalho de `processed.txt`
+  aplicado também a pedidos de 1 vídeo só (import sob demanda pelo app) fazia o processo
+  terminar sem nunca imprimir `RESULT slug ok|skip` na 2ª vez que o MESMO vídeo era
+  pedido — a API ficava esperando e fechava o job como "failed" por timeout. Corrigido:
+  o atalho só entra quando há mais de 1 vídeo (só vale a pena/é seguro para playlists
+  grandes); pedido de 1 vídeo sempre passa pelo loop normal, que já sabia reportar
+  "já importada" corretamente.
 - **Limpeza pendente**: música de teste `josh-woodward-josh-woodward-crazy-glue` no
   catálogo (import e2e com título mal parseado antes do fix da heurística) — apagar
   `apps/api/media/josh-woodward-josh-woodward-crazy-glue.{json,mp3}` se o usuário quiser.
@@ -209,9 +221,35 @@ licença e NÃO devem ser importados em massa no produto.
   progresso via `catalog:import_update` (broadcast), música pronta via `catalog:new_song`
   (hot-add com `addProcessedSong` no catalog.ts; participant e host dão append sem refresh).
   `PYTHON_BIN` env aponta o Python (default "python"). Import = uso pessoal, não licenciado.
+  **Progresso real por estágio (2026-07-14)**: `ImportJob` ganhou `requesterId`, `progress`
+  (0–100) e `stage` (texto curto) — `importer.ts` varre a saída acumulada do processo
+  (stdout+stderr) por marcadores conhecidos do pipeline (`[1/4] Demucs...`, `[2/4]
+  Extraindo...`, etc.) e do `[download] NN%` do yt-dlp, subindo o progresso em degraus
+  (nunca desce; não tenta parsear a barra tqdm interna do Demucs — o estágio "Removendo a
+  voz" fica parado no mesmo % por ~2–3min, compensado só com uma animação de pulso no
+  client). `HubView` mostra um banner persistente (fora do sheet, em qualquer aba) com
+  `ProgressBar` + estágio + % **só para quem pediu a importação** (filtro por
+  `requesterId === me.id`); o toast de conclusão continua global (avisa todo mundo que
+  uma música nova chegou). Teste: `scripts/test-import-e2e.mjs` agora loga
+  estágio/progresso a cada update e falha se menos de 2 estágios distintos aparecerem
+  antes do `done` (prova que o parsing em tempo real funciona).
+  **Bug de dedupe corrigido**: ver seção 0 — o atalho de `processed.txt` do
+  `batch_youtube.py` só se aplica a mais de 1 vídeo agora.
 - **Gêneros reais**: `fix_genres.py` (backfill) e o pipeline consultam a iTunes Search API
   (grátis, sem chave, `country=BR` → "Sertanejo", "MPB"...) quando o gênero é o default
   "Pop/Rock"; ids corrigidos em `lyrics_backup/genres_fixed.txt`.
+- **Redesign da LobbyView (TV, 2026-07-14)**: tela de lobby (`apps/host/src/components/
+  LobbyView.tsx`) redesenhada a partir de um esboço do usuário (`docs/jam-layout.png`):
+  header com logo JAMROOM, headline "Sua Jam está aberta!" com destaque roxo, label
+  "ENTRE NA JAM" + glow ao redor do QR, divisor "ou use o código", seção "PARTICIPANTES"
+  (uppercase, contagem alinhada à direita) com linhas em card (não mais pills), rodapé
+  com ícone de pessoas + status. **Decisão do usuário**: sem identidade/nome de anfitrião
+  (não existe conceito de "host com nome" no sistema — ver seção 3) — sem badge
+  "ANFITRIÃO" na lista, só participantes que entraram pelo celular. Toda a lógica
+  condicional existente (countdown "A seguir", fila, leaderboard compacto) foi preservada
+  intacta, só o visual mudou. Validado em 1920×1080 (bate com o esboço); em viewports
+  menores que ~900px de altura o rodapé pode ficar fora da área visível (conteúdo mais
+  alto que a tela) — não testado em TV real ainda.
 - **Pitch detection**: 100% client-side no celular (privacidade/latência/custo, decisão do plano).
   AudioWorklet + autocorrelação NSDF/McLeod em JS puro (`apps/participant/src/lib/pitchDetector.ts`),
   janela 2048, decimação 3x, faixa 80–1000 Hz. Trocar por pYIN/aubio-WASM não muda a interface.
@@ -287,6 +325,9 @@ Fonte completa: `docs/layoutDesc_extracted.txt`. Tokens em `packages/config/tail
     hot-add no catálogo), letras sincronizadas via LRCLIB, gêneros reais via iTunes.
   - Resiliência (07-14): espelho HTTP :4000 para TVs sem suporte a cert self-signed;
     clients refazem attach/rejoin quando a API reinicia.
+  - Progresso real de import + redesign da LobbyView (07-14): barra de progresso por
+    estágio (parsing da saída do pipeline) persistente para quem importou; tela da TV
+    redesenhada a partir do esboço do usuário (`docs/jam-layout.png`).
 - **Fase 3 — Monetização**: **adiada a pedido do usuário**.
 - **Fase 4 — Locação de equipamentos**: fora do escopo.
 
