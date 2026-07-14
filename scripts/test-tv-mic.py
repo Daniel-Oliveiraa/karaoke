@@ -72,13 +72,22 @@ def main():
             raise AssertionError(f"latencia implausivel ate para headless: {best}ms")
 
         # o som esta de fato fluindo? (pacotes PCM chegando + contexto tocando)
+        # __tvmic e {ctxState, <participantId>: {packets, ...}} — um bloco
+        # por celular conectado (duetos: ate 2)
+        def total_packets(dbg):
+            if not dbg:
+                return 0
+            return sum(
+                v.get("packets", 0) for v in dbg.values() if isinstance(v, dict)
+            )
+
         dbg1 = tv.evaluate("window.__tvmic")
         time.sleep(2)
         dbg2 = tv.evaluate("window.__tvmic")
         print("debug tv:", dbg2)
         if not dbg2 or dbg2.get("ctxState") != "running":
             raise AssertionError(f"AudioContext da TV nao esta tocando: {dbg2}")
-        if not dbg1 or dbg2.get("packets", 0) <= dbg1.get("packets", 0):
+        if total_packets(dbg2) <= total_packets(dbg1):
             raise AssertionError(f"pacotes de voz nao estao fluindo: {dbg1} -> {dbg2}")
         print("ok - pacotes PCM fluindo e AudioContext tocando (som audivel)")
 
