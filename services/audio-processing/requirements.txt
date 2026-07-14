@@ -3,3 +3,6 @@ librosa>=0.10
 faster-whisper>=1.0
 soundfile>=0.12
 numpy
+# batch_youtube.py (uso pessoal): download + ffmpeg estatico p/ extrair mp3
+yt-dlp
+imageio-ffmpeg

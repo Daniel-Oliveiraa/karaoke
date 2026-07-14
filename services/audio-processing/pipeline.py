@@ -52,6 +52,19 @@ def hz_to_midi(hz: np.ndarray) -> np.ndarray:
     return 69 + 12 * np.log2(hz / 440.0)
 
 
+def find_ffmpeg() -> str | None:
+    """ffmpeg do PATH ou o binario estatico do imageio-ffmpeg."""
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def separate_vocals(original: Path, workdir: Path) -> Path:
     """Demucs two-stems -> retorna o caminho do vocals.wav."""
     print(f"[1/4] Demucs separando vocal de {original.name} (CPU, ~minutos)...")
@@ -218,8 +231,20 @@ def main() -> None:
         notes = segment_notes(times, f0, voiced_prob)
         lines = transcribe_lines(vocals, args.language)
 
-        dest_audio = MEDIA_DIR / f"{args.id}{instrumental.suffix.lower()}"
-        shutil.copyfile(instrumental, dest_audio)
+        # instrumental do Demucs sai em wav (~45MB/musica): comprime para
+        # mp3 se houver ffmpeg, senao copia o wav mesmo
+        ffmpeg = find_ffmpeg() if instrumental.suffix.lower() == ".wav" else None
+        if ffmpeg:
+            dest_audio = MEDIA_DIR / f"{args.id}.mp3"
+            subprocess.run(
+                [ffmpeg, "-y", "-i", str(instrumental),
+                 "-codec:a", "libmp3lame", "-q:a", "2", str(dest_audio)],
+                check=True,
+                capture_output=True,
+            )
+        else:
+            dest_audio = MEDIA_DIR / f"{args.id}{instrumental.suffix.lower()}"
+            shutil.copyfile(instrumental, dest_audio)
 
         colors = PALETTE[sum(ord(c) for c in args.id) % len(PALETTE)]
         song = {
