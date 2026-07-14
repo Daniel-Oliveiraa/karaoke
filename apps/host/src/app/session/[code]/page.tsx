@@ -35,6 +35,8 @@ export default function SessionPage({
   const [countdown, setCountdown] = useState<number | null>(null);
   const [secondsToNext, setSecondsToNext] = useState<number | null>(null);
   const [micStats, setMicStats] = useState<Map<string, MicStats>>(new Map());
+  /** Autoplay travou o áudio da voz — a TV precisa de um clique/tecla. */
+  const [micBlocked, setMicBlocked] = useState(false);
 
   const playbackRef = useRef<SynthPlayback | null>(null);
   const endedSentRef = useRef(false);
@@ -127,7 +129,10 @@ export default function SessionPage({
   // "voz na TV": receptor WebRTC ativo enquanto uma música toca
   useEffect(() => {
     if (!playingItemId) return;
-    const receiver = createMicReceiver(setMicStats);
+    const receiver = createMicReceiver((stats, blocked) => {
+      setMicStats(stats);
+      setMicBlocked(blocked);
+    });
     return () => receiver.stop();
   }, [playingItemId]);
 
@@ -206,6 +211,7 @@ export default function SessionPage({
           pitches={pitches}
           songsById={songsById}
           micStats={micStats}
+          micBlocked={micBlocked}
           onSkip={() => getSocket().emit("host:skip_song")}
         />
       );

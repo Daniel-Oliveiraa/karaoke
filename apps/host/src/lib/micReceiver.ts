@@ -155,7 +155,12 @@ interface Peer {
 }
 
 export function createMicReceiver(
-  onStats: (stats: Map<string, MicStats>) => void
+  /**
+   * `audioBlocked` é reportado à parte das stats por conexão: o AudioContext
+   * pode nascer suspenso (autoplay) ANTES de qualquer cantor conectar, e a
+   * TV precisa mostrar o aviso "clique na tela" mesmo sem conexões.
+   */
+  onStats: (stats: Map<string, MicStats>, audioBlocked: boolean) => void
 ): MicReceiverManager {
   const socket = getSocket();
 
@@ -197,7 +202,7 @@ export function createMicReceiver(
     voiceBus = null;
     analyser = null;
     workletReady = null;
-    onStats(new Map());
+    onStats(new Map(), false);
   }
 
   /** Contexto + barramento de voz (dry + reverb) compartilhados, 1x. */
@@ -216,6 +221,8 @@ export function createMicReceiver(
         document.addEventListener("click", resume);
         document.addEventListener("keydown", resume);
       }
+      // qualquer transição suspended↔running atualiza a UI na hora
+      ctx.onstatechange = () => void collectStats();
 
       voiceBus = ctx.createGain();
       voiceBus.gain.value = 1;
@@ -250,6 +257,9 @@ export function createMicReceiver(
           new Blob([PLAYER_WORKLET], { type: "application/javascript" })
         )
       );
+      // avisa a UI já — se nasceu suspenso, o aviso "clique na tela"
+      // precisa aparecer antes mesmo de a conexão completar
+      void collectStats();
     }
     await workletReady;
   }
@@ -334,7 +344,7 @@ export function createMicReceiver(
     }
     // diagnóstico acessível no console da TV: window.__tvmic
     (window as unknown as Record<string, unknown>).__tvmic = diag;
-    onStats(all);
+    onStats(all, audioBlocked);
   }
 
   async function handleOffer(participantId: string, sdp: string) {

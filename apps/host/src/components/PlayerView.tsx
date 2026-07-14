@@ -17,6 +17,7 @@ export function PlayerView({
   pitches,
   songsById,
   micStats,
+  micBlocked,
   onSkip,
 }: {
   jam: Jam;
@@ -25,6 +26,8 @@ export function PlayerView({
   pitches: Map<string, LivePitch>;
   songsById: Map<string, Song>;
   micStats?: Map<string, MicStats>;
+  /** Autoplay travou o áudio da voz — mostrar o aviso mesmo sem conexão. */
+  micBlocked?: boolean;
   onSkip?: () => void;
 }) {
   const item = jam.queue.find((i) => i.id === jam.currentItemId);
@@ -61,7 +64,7 @@ export function PlayerView({
 
   // medidor "voz na TV" agregado (até 2 celulares conectados)
   const mics = [...(micStats?.values() ?? [])];
-  const anyBlocked = mics.some((m) => m.audioBlocked);
+  const anyBlocked = Boolean(micBlocked) || mics.some((m) => m.audioBlocked);
   const worstMic = mics.reduce<MicStats | null>(
     (worst, m) => (worst === null || m.totalMs > worst.totalMs ? m : worst),
     null
@@ -76,7 +79,7 @@ export function PlayerView({
       }}
     >
       {/* medidor do protótipo "voz na TV" */}
-      {worstMic && (
+      {(worstMic || anyBlocked) && (
         <div
           className={`absolute left-1/2 top-4 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full border px-4 py-1.5 backdrop-blur-glass ${
             anyBlocked
@@ -86,7 +89,9 @@ export function PlayerView({
         >
           <span
             className={`inline-block h-2 w-2 rounded-full ${
-              mics.every((m) => m.connected) ? "bg-success" : "bg-warning animate-pulse"
+              !anyBlocked && mics.every((m) => m.connected)
+                ? "bg-success"
+                : "bg-warning animate-pulse"
             }`}
           />
           {anyBlocked ? (
@@ -97,11 +102,11 @@ export function PlayerView({
             <>
               <span className="text-caption font-semibold text-foreground">
                 Voz na TV{mics.length > 1 ? ` ×${mics.length}` : ""} · ~
-                {worstMic.totalMs} ms
+                {worstMic?.totalMs ?? 0} ms
               </span>
               <span className="text-caption text-foreground-muted">
-                (rede {worstMic.networkMs} · buffer {worstMic.jitterBufferMs} · saída{" "}
-                {worstMic.outputMs})
+                (rede {worstMic?.networkMs ?? 0} · buffer{" "}
+                {worstMic?.jitterBufferMs ?? 0} · saída {worstMic?.outputMs ?? 0})
               </span>
             </>
           )}
