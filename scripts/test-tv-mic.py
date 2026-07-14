@@ -89,7 +89,11 @@ def main():
             raise AssertionError(f"AudioContext da TV nao esta tocando: {dbg2}")
         if total_packets(dbg2) <= total_packets(dbg1):
             raise AssertionError(f"pacotes de voz nao estao fluindo: {dbg1} -> {dbg2}")
-        print("ok - pacotes PCM fluindo e AudioContext tocando (som audivel)")
+        # RMS medido no barramento de voz: prova que o audio decodificado
+        # chega ao mixer (o mic fake do Playwright emite um tom continuo)
+        if dbg2.get("outputRms", 0) <= 0.0005:
+            raise AssertionError(f"sinal de audio zerado no mixer da TV: {dbg2}")
+        print("ok - pacotes PCM fluindo, mixer com sinal e AudioContext tocando")
 
         tv.screenshot(path=f"{SHOTS}/tvmic_1_tv_meter.png")
         phone.screenshot(path=f"{SHOTS}/tvmic_2_phone_toggle.png")

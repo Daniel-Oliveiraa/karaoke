@@ -144,6 +144,7 @@ export function createMicReceiver(
   const peers = new Map<string, Peer>();
   let ctx: AudioContext | null = null;
   let voiceBus: GainNode | null = null;
+  let analyser: AnalyserNode | null = null;
   let workletReady: Promise<void> | null = null;
   let statsTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -176,6 +177,7 @@ export function createMicReceiver(
     void ctx?.close();
     ctx = null;
     voiceBus = null;
+    analyser = null;
     workletReady = null;
     onStats(new Map());
   }
@@ -199,6 +201,12 @@ export function createMicReceiver(
 
       voiceBus = ctx.createGain();
       voiceBus.gain.value = 1;
+
+      // medidor de sinal real (diagnóstico em __tvmic.outputRms): prova que
+      // áudio decodificado está chegando ao mixer, não só pacotes na rede
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      voiceBus.connect(analyser);
 
       // voz direta
       const dry = ctx.createGain();
@@ -254,7 +262,18 @@ export function createMicReceiver(
     const audioBlocked = ctx !== null && ctx.state !== "running";
 
     const all = new Map<string, MicStats>();
-    const diag: Record<string, unknown> = { ctxState: ctx?.state };
+    let outputRms = 0;
+    if (analyser) {
+      const buf = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (const v of buf) sum += v * v;
+      outputRms = Math.sqrt(sum / buf.length);
+    }
+    const diag: Record<string, unknown> = {
+      ctxState: ctx?.state,
+      outputRms: Math.round(outputRms * 10000) / 10000,
+    };
     for (const [participantId, peer] of peers) {
       const connected = peer.pc.connectionState === "connected";
       let rttMs = 0;
