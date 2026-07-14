@@ -159,6 +159,26 @@ def segment_notes(times, f0, voiced_prob, min_note_sec=0.15, max_gap_sec=0.12):
     return notes
 
 
+def synced_lyrics(title: str, artist: str, duration: float):
+    """
+    Letra sincronizada da LRCLIB (comunitaria, timestamp por linha) —
+    muito mais precisa que a transcricao do Whisper. None = sem match.
+    """
+    try:
+        from fix_lyrics import MIN_LINES, find_synced, parse_lrc
+    except ImportError:
+        return None
+    print("[4/4] Buscando letra sincronizada na LRCLIB...")
+    synced = find_synced(title, artist, duration)
+    if not synced:
+        return None
+    lines = parse_lrc(synced, duration)
+    if len(lines) < MIN_LINES:
+        return None
+    print(f"      {len(lines)} linhas sincronizadas (LRCLIB)")
+    return lines
+
+
 def transcribe_lines(vocals_path: Path, language: str | None):
     """faster-whisper -> LyricLine[] (granularidade de segmento/linha)."""
     from faster_whisper import WhisperModel
@@ -229,7 +249,19 @@ def main() -> None:
 
         times, f0, voiced_prob = extract_pitch(vocals)
         notes = segment_notes(times, f0, voiced_prob)
-        lines = transcribe_lines(vocals, args.language)
+        # letra: LRCLIB (sincronizada, exata) primeiro; Whisper como fallback
+        lines = synced_lyrics(args.title, args.artist, audio_duration(original))
+        if lines:
+            try:
+                from fix_lyrics import BACKUP, FIXED_LIST
+
+                BACKUP.mkdir(exist_ok=True)
+                with FIXED_LIST.open("a", encoding="utf-8") as fl:
+                    fl.write(args.id + "\n")
+            except ImportError:
+                pass
+        else:
+            lines = transcribe_lines(vocals, args.language)
 
         # instrumental do Demucs sai em wav (~45MB/musica): comprime para
         # mp3 se houver ffmpeg, senao copia o wav mesmo

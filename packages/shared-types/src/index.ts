@@ -77,7 +77,12 @@ export interface Participant {
   joinedAt: number;
 }
 
-export type QueueItemStatus = "queued" | "playing" | "done";
+/**
+ * "inviting" = aguardando resposta de convite de dueto — a música ainda NÃO
+ * conta como fila de reprodução (só vira "queued" quando alguém aceita ou o
+ * dono confirma solo).
+ */
+export type QueueItemStatus = "inviting" | "queued" | "playing" | "done";
 
 /** Situação de um cantor num item da fila (duetos/grupos). */
 export type SingerStatus = "invited" | "accepted" | "declined";
@@ -92,6 +97,8 @@ export interface QueueSinger {
 export const MAX_SINGERS_PER_ITEM = 4;
 /** Máximo de celulares simultâneos como "voz na TV". */
 export const MAX_TV_MICS = 2;
+/** Convite de dueto sem resposta expira (vira recusa) depois disso. */
+export const INVITE_TIMEOUT_MS = 60_000;
 
 export interface QueueItem {
   id: string;
@@ -226,21 +233,29 @@ export interface ClientToServerEvents {
     payload: { code: string; participantId: string },
     cb: (res: JoinResult) => void
   ) => void;
-  "participant:add_song": (songId: string) => void;
-  /** Participante remove uma música SUA que ainda está na fila. */
-  "participant:remove_song": (queueItemId: string) => void;
   /**
-   * Dono de um item ainda na fila convida outro participante para cantar
-   * junto (dueto/grupo). O convite viaja no snapshot `jam:state`.
+   * Adiciona música. Com `inviteeIds`, o item nasce "inviting" (convite de
+   * dueto viaja no snapshot `jam:state`) e só entra na fila de reprodução
+   * quando alguém aceita ou o dono confirma solo (`participant:resolve_item`).
    */
-  "participant:invite": (payload: {
-    queueItemId: string;
-    inviteeId: string;
+  "participant:add_song": (payload: {
+    songId: string;
+    inviteeIds?: string[];
   }) => void;
-  /** Convidado aceita ou recusa um convite de dueto/grupo. */
+  /** Participante remove uma música SUA (na fila ou com convite pendente). */
+  "participant:remove_song": (queueItemId: string) => void;
+  /** Convidado aceita ou recusa um convite de dueto (item "inviting"). */
   "participant:invite_response": (payload: {
     queueItemId: string;
     accept: boolean;
+  }) => void;
+  /**
+   * Decisão do dono quando todos os convidados recusaram/expiraram:
+   * addSolo=true põe a música na fila (solo); false cancela e remove.
+   */
+  "participant:resolve_item": (payload: {
+    queueItemId: string;
+    addSolo: boolean;
   }) => void;
   /**
    * O cantor sai da música em andamento (sem pontuação para ele). Se não

@@ -40,6 +40,21 @@ Baixar do YouTube viola os ToS da plataforma: fluxo **somente para estudo
 pessoal**, nunca para o catálogo do produto (o `attribution` de cada item
 registra a origem e a ausência de licença comercial).
 
+## Letras sincronizadas (LRCLIB)
+
+O pipeline tenta primeiro a [LRCLIB](https://lrclib.net) (base comunitária de
+letras com timestamp por linha, match por artista+título+duração ±4s) e só cai
+no Whisper se não houver letra sincronizada. Para corrigir músicas já
+importadas com letra do Whisper:
+
+```bash
+python fix_lyrics.py [--id <slug>] [--force]
+```
+
+Originais ficam em `lyrics_backup/` (gitignored); músicas UltraStar são
+puladas (letra por sílaba já é exata). Letras também são obra protegida —
+mesmo enquadramento de uso pessoal do `batch_youtube.py`.
+
 ## Etapas internas
 
 1. **Demucs** (htdemucs, two-stems) separa o vocal da gravação original —

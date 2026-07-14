@@ -8,7 +8,6 @@ import type {
   QueueItem,
   ScoreResult,
 } from "@jamroom/shared-types";
-import { MAX_SINGERS_PER_ITEM } from "@jamroom/shared-types";
 
 /**
  * Estado das Jams em memória, com snapshot em arquivo JSON: reiniciar a
@@ -38,6 +37,8 @@ export interface JamRecord {
    * no restart o item "playing" volta para a fila de qualquer forma.
    */
   pendingScores: Map<string, ScoreResult> | null;
+  /** Timers de expiração de convite, por queueItemId (só memória). */
+  inviteTimers: Map<string, NodeJS.Timeout>;
 }
 
 const jams = new Map<string, JamRecord>();
@@ -117,8 +118,24 @@ function loadJams(): void {
         jam.currentItemId = null;
         jam.songStartedAt = null;
       }
+      // convites pendentes não sobrevivem ao restart (o timer morreu):
+      // pendentes viram recusa; sem parceiro aceito, o dono revê o popup
+      // de decisão quando reconectar
+      for (const item of jam.queue) {
+        if (item.status === "inviting") {
+          for (const s of item.singers) {
+            if (s.status === "invited") s.status = "declined";
+          }
+          resolveInviting(item);
+        }
+      }
       for (const p of jam.participants) p.connected = false;
-      jams.set(jam.code, { jam, resultTimeout: null, pendingScores: null });
+      jams.set(jam.code, {
+        jam,
+        resultTimeout: null,
+        pendingScores: null,
+        inviteTimers: new Map(),
+      });
     }
     if (jams.size > 0) {
       console.log(
@@ -151,7 +168,12 @@ export function createJam(): JamRecord {
     lastResults: [],
     createdAt: Date.now(),
   };
-  const record: JamRecord = { jam, resultTimeout: null, pendingScores: null };
+  const record: JamRecord = {
+    jam,
+    resultTimeout: null,
+    pendingScores: null,
+    inviteTimers: new Map(),
+  };
   jams.set(jam.code, record);
   return record;
 }
@@ -173,55 +195,33 @@ export function addParticipant(jam: Jam, name: string): Participant {
   return participant;
 }
 
-export function addToQueue(jam: Jam, songId: string, participantId: string): QueueItem {
+export function addToQueue(
+  jam: Jam,
+  songId: string,
+  participantId: string,
+  inviteeIds: string[] = []
+): QueueItem {
+  const now = Date.now();
   const item: QueueItem = {
     id: randomUUID(),
     songId,
     participantId,
     singers: [
-      { participantId, status: "accepted", invitedAt: Date.now() },
+      { participantId, status: "accepted", invitedAt: now },
+      ...inviteeIds.map((id) => ({
+        participantId: id,
+        status: "invited" as const,
+        invitedAt: now,
+      })),
     ],
-    status: "queued",
-    addedAt: Date.now(),
+    status: inviteeIds.length > 0 ? "inviting" : "queued",
+    addedAt: now,
   };
   jam.queue.push(item);
   return item;
 }
 
-/**
- * Dono convida outro participante para cantar junto. Re-convida quem já
- * recusou; no-op se já convidado/aceito. False = convite inválido.
- */
-export function inviteSinger(
-  jam: Jam,
-  queueItemId: string,
-  ownerId: string,
-  inviteeId: string
-): boolean {
-  const item = jam.queue.find((i) => i.id === queueItemId);
-  if (!item || item.status !== "queued" || item.participantId !== ownerId) {
-    return false;
-  }
-  if (inviteeId === ownerId) return false;
-  if (!jam.participants.some((p) => p.id === inviteeId)) return false;
-  const existing = item.singers.find((s) => s.participantId === inviteeId);
-  if (existing) {
-    if (existing.status !== "declined") return true; // já convidado/aceito
-    existing.status = "invited";
-    existing.invitedAt = Date.now();
-    return true;
-  }
-  const active = item.singers.filter((s) => s.status !== "declined").length;
-  if (active >= MAX_SINGERS_PER_ITEM) return false;
-  item.singers.push({
-    participantId: inviteeId,
-    status: "invited",
-    invitedAt: Date.now(),
-  });
-  return true;
-}
-
-/** Convidado aceita/recusa. Só transiciona "invited" e só com item na fila. */
+/** Convidado aceita/recusa. Só transiciona "invited" em item "inviting". */
 export function respondInvite(
   jam: Jam,
   queueItemId: string,
@@ -229,13 +229,32 @@ export function respondInvite(
   accept: boolean
 ): boolean {
   const item = jam.queue.find((i) => i.id === queueItemId);
-  if (!item || item.status !== "queued") return false;
+  if (!item || item.status !== "inviting") return false;
   const singer = item.singers.find(
     (s) => s.participantId === participantId && s.status === "invited"
   );
   if (!singer) return false;
   singer.status = accept ? "accepted" : "declined";
   return true;
+}
+
+/**
+ * Tenta resolver um item "inviting": sem respostas pendentes E com algum
+ * co-cantor aceito, a música entra na fila ("queued"). Sem co-cantor, o item
+ * fica "inviting" sem pendentes = estado "dono decide" (solo ou cancela),
+ * derivado no client a partir do snapshot. True = virou "queued".
+ */
+export function resolveInviting(item: QueueItem): boolean {
+  if (item.status !== "inviting") return false;
+  if (item.singers.some((s) => s.status === "invited")) return false;
+  const hasPartner = item.singers.some(
+    (s) => s.status === "accepted" && s.participantId !== item.participantId
+  );
+  if (hasPartner) {
+    item.status = "queued";
+    return true;
+  }
+  return false;
 }
 
 export function nextQueued(jam: Jam): QueueItem | undefined {
@@ -260,14 +279,19 @@ export function endJam(record: JamRecord): void {
   record.jam.status = "ended";
   if (record.resultTimeout) clearTimeout(record.resultTimeout);
   record.resultTimeout = null;
+  for (const t of record.inviteTimers.values()) clearTimeout(t);
+  record.inviteTimers.clear();
   scheduleSave();
   setTimeout(() => jams.delete(record.jam.code), ENDED_TTL_MS).unref();
 }
 
-/** Remove uma música da fila (só itens ainda não tocados). */
+/** Remove uma música da fila (itens não tocados; inclui convite pendente). */
 export function removeFromQueue(jam: Jam, queueItemId: string, participantId: string): boolean {
   const idx = jam.queue.findIndex(
-    (i) => i.id === queueItemId && i.participantId === participantId && i.status === "queued"
+    (i) =>
+      i.id === queueItemId &&
+      i.participantId === participantId &&
+      (i.status === "queued" || i.status === "inviting")
   );
   if (idx < 0) return false;
   jam.queue.splice(idx, 1);

@@ -9,7 +9,11 @@ import type {
   ScoreResult,
   ServerToClientEvents,
 } from "@jamroom/shared-types";
-import { acceptedSingerIds } from "@jamroom/shared-types";
+import {
+  INVITE_TIMEOUT_MS,
+  MAX_SINGERS_PER_ITEM,
+  acceptedSingerIds,
+} from "@jamroom/shared-types";
 import { FULL_CATALOG, MEDIA_DIR, getSong } from "./catalog";
 import {
   addParticipant,
@@ -19,9 +23,9 @@ import {
   currentItem,
   endJam,
   getJam,
-  inviteSinger,
   nextQueued,
   removeFromQueue,
+  resolveInviting,
   respondInvite,
   scheduleSave,
   skipCurrent,
@@ -156,6 +160,8 @@ type JamSocket = Socket<
 >;
 
 const RESULT_FALLBACK_MS = 8000;
+// override por env só para testes (o timeout real de produto é o do protocolo)
+const INVITE_EXPIRE_MS = Number(process.env.INVITE_TIMEOUT_MS ?? INVITE_TIMEOUT_MS);
 
 function broadcastState(code: string): void {
   const record = getJam(code);
@@ -225,10 +231,6 @@ io.on("connection", (socket: JamSocket) => {
     if (!record || record.jam.status === "playing" || record.jam.status === "ended") return;
     const item = nextQueued(record.jam);
     if (!item || !getSong(item.songId)) return;
-    // convites pendentes expiram: a música começa com quem aceitou
-    for (const singer of item.singers) {
-      if (singer.status === "invited") singer.status = "declined";
-    }
     item.status = "playing";
     record.jam.status = "playing";
     record.jam.currentItemId = item.id;
@@ -343,12 +345,36 @@ io.on("connection", (socket: JamSocket) => {
     broadcastState(code);
   });
 
-  socket.on("participant:add_song", (songId) => {
+  socket.on("participant:add_song", ({ songId, inviteeIds }) => {
     const { code, participantId } = socket.data;
     if (socket.data.role !== "participant" || !code || !participantId) return;
     const record = getJam(code);
     if (!record || record.jam.status === "ended" || !getSong(songId)) return;
-    addToQueue(record.jam, songId, participantId);
+    // convidados válidos: existem na Jam, não são o dono, sem duplicata
+    const invitees = [...new Set(inviteeIds ?? [])]
+      .filter(
+        (id) =>
+          id !== participantId &&
+          record.jam.participants.some((p) => p.id === id)
+      )
+      .slice(0, MAX_SINGERS_PER_ITEM - 1);
+    const item = addToQueue(record.jam, songId, participantId, invitees);
+    if (item.status === "inviting") {
+      // sem resposta em INVITE_EXPIRE_MS: pendentes viram recusa e o item
+      // resolve (entra na fila se alguém aceitou; senão o dono decide)
+      record.inviteTimers.set(
+        item.id,
+        setTimeout(() => {
+          record.inviteTimers.delete(item.id);
+          if (item.status !== "inviting") return;
+          for (const s of item.singers) {
+            if (s.status === "invited") s.status = "declined";
+          }
+          resolveInviting(item);
+          broadcastState(code);
+        }, INVITE_EXPIRE_MS)
+      );
+    }
     broadcastState(code);
   });
 
@@ -358,6 +384,9 @@ io.on("connection", (socket: JamSocket) => {
     const record = getJam(code);
     if (!record || record.jam.status === "ended") return;
     if (removeFromQueue(record.jam, queueItemId, participantId)) {
+      const timer = record.inviteTimers.get(queueItemId);
+      if (timer) clearTimeout(timer);
+      record.inviteTimers.delete(queueItemId);
       broadcastState(code);
     }
   });
@@ -390,24 +419,50 @@ io.on("connection", (socket: JamSocket) => {
     broadcastState(code);
   });
 
-  socket.on("participant:invite", ({ queueItemId, inviteeId }) => {
-    const { code, participantId } = socket.data;
-    if (socket.data.role !== "participant" || !code || !participantId) return;
-    const record = getJam(code);
-    if (!record || record.jam.status === "ended") return;
-    if (inviteSinger(record.jam, queueItemId, participantId, inviteeId)) {
-      broadcastState(code);
-    }
-  });
-
   socket.on("participant:invite_response", ({ queueItemId, accept }) => {
     const { code, participantId } = socket.data;
     if (socket.data.role !== "participant" || !code || !participantId) return;
     const record = getJam(code);
     if (!record || record.jam.status === "ended") return;
     if (respondInvite(record.jam, queueItemId, participantId, accept)) {
+      const item = record.jam.queue.find((i) => i.id === queueItemId);
+      if (item) {
+        resolveInviting(item);
+        // todos responderam (virou "queued" ou caiu no "dono decide"):
+        // o timer de expiração não tem mais o que fazer
+        if (!item.singers.some((s) => s.status === "invited")) {
+          const timer = record.inviteTimers.get(item.id);
+          if (timer) clearTimeout(timer);
+          record.inviteTimers.delete(item.id);
+        }
+      }
       broadcastState(code);
     }
+  });
+
+  socket.on("participant:resolve_item", ({ queueItemId, addSolo }) => {
+    const { code, participantId } = socket.data;
+    if (socket.data.role !== "participant" || !code || !participantId) return;
+    const record = getJam(code);
+    if (!record || record.jam.status === "ended") return;
+    const item = record.jam.queue.find((i) => i.id === queueItemId);
+    if (
+      !item ||
+      item.status !== "inviting" ||
+      item.participantId !== participantId ||
+      item.singers.some((s) => s.status === "invited") // ainda há pendente
+    ) {
+      return;
+    }
+    const timer = record.inviteTimers.get(item.id);
+    if (timer) clearTimeout(timer);
+    record.inviteTimers.delete(item.id);
+    if (addSolo) {
+      item.status = "queued";
+    } else {
+      record.jam.queue.splice(record.jam.queue.indexOf(item), 1);
+    }
+    broadcastState(code);
   });
 
   socket.on("participant:pitch", (sample) => {

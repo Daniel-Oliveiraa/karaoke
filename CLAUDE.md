@@ -80,7 +80,7 @@ inbound TCP 3001/3002/4001 (perfil Privado). IP atual configurado: 192.168.15.14
 
 ### Testes (executar após mudanças no protocolo/scoring)
 ```bash
-node scripts/test-protocol.mjs             # protocolo socket completo, incl. skip/remove (API de pé)
+node scripts/test-protocol.mjs             # protocolo completo, incl. duetos (API de pé com INVITE_TIMEOUT_MS=2000)
 node scripts/test-persistence.mjs create   # + kill/restart da API + `verify <code> <pid>`: snapshot
 npx tsx scripts/test-scoring.ts            # algoritmo de score com performances sintéticas
 python scripts/test-jam-flow.py            # fluxo completo em navegador (Playwright, mic fake)
@@ -107,6 +107,11 @@ instrumental de outra fonte). `batch_ultrastar_cc.py` importa o repositório ofi
 UltraStar-Deluxe/songs (39 pacotes CC). `batch_local.py [--strip-vocals]` importa pacotes
 locais de `input/ultrastar/` (uma pasta por música: .txt + áudio) — fluxo do usuário para
 estudo pessoal em casa; itens entram marcados como não licenciados para uso comercial.
+**Letras sincronizadas (2026-07-14)**: o pipeline tenta a **LRCLIB** (lrclib.net, letra
+comunitária com timestamp por linha; match artista+título+duração ±4s) antes do Whisper;
+`fix_lyrics.py [--id slug] [--force]` corrige músicas já importadas (backup em
+`lyrics_backup/`, gitignored; UltraStar é pulado — letra por sílaba já é exata; letras são
+obra protegida — uso pessoal, catálogo comercial exige licença ex-Musixmatch).
 **`batch_youtube.py <URL|ytsearchN:termos> [--language xx] [--limit N]`** (2026-07-13):
 baixa playlist/vídeo com yt-dlp (MP3 cacheado em `input/youtube/`, ffmpeg do PATH ou do
 pacote `imageio-ffmpeg`) e roda o pipeline IA em cada faixa; título/artista vêm dos
@@ -133,13 +138,18 @@ licença e NÃO devem ser importados em massa no produto.
 - **Pular/cancelar**: `host:skip_song` (botão na TV), `participant:skip_song` (cantor sai da
   música — num grupo os demais continuam; se ninguém sobrar, pula) e
   `participant:remove_song` (✕ nos itens próprios da fila) — pular não pontua.
-- **Duetos/grupos (2026-07-13)**: ao adicionar música, o dono pode convidar outros
-  participantes ("+ dueto" na fila → sheet de convite); convidado recebe banner
-  Aceitar/Recusar (`participant:invite` / `participant:invite_response`); convites pendentes
-  expiram quando a música começa. `QueueItem.singers: QueueSinger[]` (dono = `participantId`,
-  entra aceito; helper `acceptedSingerIds`); máx `MAX_SINGERS_PER_ITEM = 4`. Cada celular
-  captura o próprio áudio e envia score individual; servidor coleta em `pendingScores` e
-  fecha quando todos enviam (fallback 8s preenche zeros de quem sumiu).
+- **Duetos/grupos (2026-07-13; convite pré-fila em 2026-07-14)**: o convite acontece AO
+  ADICIONAR — o popup do catálogo pergunta "chamar alguém?" (seleção múltipla) e o item
+  nasce com status **`"inviting"`** (`participant:add_song {songId, inviteeIds}`), fora da
+  fila de reprodução até resolver: convidado recebe banner Aceitar/Recusar
+  (`participant:invite_response`); alguém aceitou → vira `"queued"`; todos recusaram ou
+  expirou (`INVITE_TIMEOUT_MS` 60s, env sobrescreve p/ teste) → banner de decisão do dono
+  (`participant:resolve_item {addSolo}` — solo ou cancela). `QueueItem.singers:
+  QueueSinger[]` (dono = `participantId`, entra aceito; helper `acceptedSingerIds`); máx
+  `MAX_SINGERS_PER_ITEM = 4`. Quando a música começa, TODO cantor aceito (dono e
+  convidados) cai no SingView ("Liberar microfone"); cada celular captura o próprio áudio
+  e envia score individual; servidor coleta em `pendingScores` e fecha quando todos enviam
+  (fallback 8s preenche zeros de quem sumiu).
   `Jam.lastResults: ScoreResult[]` (ordenado por score desc) substituiu `lastResult` —
   snapshot antigo é migrado no load. TV: um PitchMeter por cantor, resultado lado a lado
   com badge "melhor da música". "Voz na TV" aceita até `MAX_TV_MICS = 2` celulares

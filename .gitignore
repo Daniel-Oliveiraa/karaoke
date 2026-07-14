@@ -7,6 +7,7 @@ next-env.d.ts
 # áudio (grande e/ou licenciado — regenerável via services/audio-processing)
 apps/api/media/
 services/audio-processing/input/
+services/audio-processing/lyrics_backup/
 
 # snapshot de estado das jams (runtime)
 apps/api/data/
