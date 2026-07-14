@@ -307,7 +307,8 @@ licença e NÃO devem ser importados em massa no produto.
 - Vídeo no player (hoje: áudio real + fundo gradiente para músicas reais; synth para demos).
 - Highlight de letra por palavra/sílaba na TV (os dados por sílaba JÁ existem nas músicas
   UltraStar — falta só a UI; músicas do pipeline IA têm granularidade de linha).
-- Repositório git **local apenas** — sem remote (GitHub) configurado ainda.
+- Repositório git com remote no GitHub: `https://github.com/Daniel-Oliveiraa/karaoke`
+  (privado, criado em 2026-07-15). `main` já rastreia `origin/main`.
 
 ## 4. Design System — regras obrigatórias para qualquer UI nova
 
@@ -356,10 +357,9 @@ Fonte completa: `docs/layoutDesc_extracted.txt`. Tokens em `packages/config/tail
 2. Dashboard do Anfitrião + auth (destrava o fluxo de produto real: conta → criar Jam → TV;
    inclui o controle remoto da Jam que hoje está espalhado entre TV e celular do cantor).
 3. `apps/admin` com CRUD de catálogo simples (prepara a entrada do catálogo licenciado).
-4. Criar remote no GitHub e fazer push (repo é só local).
-5. Persistência real (Redis para estado vivo, Postgres para histórico) atrás do `store.ts`.
-6. Calibrar scoring em festa de verdade (ruído, várias vozes) e ajustar `CLARITY_MIN`/limiares.
-7. Retomar a frente comercial: fornecedores B2B de catálogo (o importador já fala UltraStar,
+4. Persistência real (Redis para estado vivo, Postgres para histórico) atrás do `store.ts`.
+5. Calibrar scoring em festa de verdade (ruído, várias vozes) e ajustar `CLARITY_MIN`/limiares.
+6. Retomar a frente comercial: fornecedores B2B de catálogo (o importador já fala UltraStar,
    e o pipeline IA cobre qualquer par áudio original + instrumental).
 
 ## 6. Convenções observadas (seguir ao continuar)
