@@ -4,6 +4,32 @@
 > trabalho exatamente de onde parou, sem depender do histórico de conversa. Sempre que uma
 > decisão nova for tomada com o usuário, ou uma fase for concluída, **atualize este arquivo**.
 
+## 0. Estado ao fim de 2026-07-14 (retomar daqui)
+
+- **Git limpo, tudo commitado** (main local, sem remote). Últimos commits: fallback
+  ScriptProcessor da voz na TV, aviso de autoplay, re-attach na reconexão, catálogo v2
+  (abas + import in-app), convite pré-fila, letras LRCLIB, gêneros iTunes.
+- **Processos que estavam de pé** (morrem se o PC reiniciar; como subir na seção 2):
+  API (`npm run dev:api`, tsx watch, HTTPS 4001 + espelho HTTP 4000), participant
+  (`npm run dev:participant`, dev HTTPS), host em **produção** (`next start -p 3001`,
+  build com env de rede local embutida — ver seção 2), web parado.
+- **Lote do YouTube (373 músicas da playlist do usuário)**: ~338/373 concluídas, processo
+  Python DESTACADO (independe da sessão). Checar/retomar:
+  `Get-Content services/audio-processing/input/youtube/processed.txt | Measure-Object -Line`;
+  se morreu, rodar de novo `python batch_youtube.py "<URL da playlist>"` (retoma do
+  checkpoint; URL da playlist: lista `PLx8_fGInIH4_GoDnJaVuO1P1sXGCOjhVg`). Falhas (~10,
+  vídeos indisponíveis) são retentadas automaticamente no re-run. Ao final, vale rodar
+  `python fix_lyrics.py` e `python fix_genres.py` de novo para as últimas músicas e
+  reiniciar a API.
+- **Pendente de confirmação do usuário**: voz na TV na TV REAL após o fallback
+  ScriptProcessor (causa raiz encontrada: AudioWorklet não existe em `http://<IP>`;
+  corrigido, validado em teste automatizado nos dois contextos, faltou o ok no hardware).
+- **Limpeza pendente**: música de teste `josh-woodward-josh-woodward-crazy-glue` no
+  catálogo (import e2e com título mal parseado antes do fix da heurística) — apagar
+  `apps/api/media/josh-woodward-josh-woodward-crazy-glue.{json,mp3}` se o usuário quiser.
+- Detalhe operacional dos commits: mensagens de commit com aspas duplas quebram no
+  PowerShell 5.1 — usar `git commit -F <arquivo>` para mensagens longas.
+
 ## 1. O que é o produto
 
 SaaS de karaokê cobrado por uso diário (nome do produto: **JAMROOM**). Diferencial: modo
@@ -38,14 +64,14 @@ Monorepo npm workspaces (sem Turborepo — decisão pragmática; reavaliar se o 
 | Pasta | Papel | Status |
 |---|---|---|
 | `apps/web` | Site institucional (Next.js 16, porta 3000) | **Completo**: Hero, FeaturesBar, Como funciona, Demonstração, Planos, FAQ, Footer |
-| `apps/api` | Backend da Jam — Node + Socket.io, HTTPS (porta 4001) | **Funcional**: sessões, fila, leaderboard, relay de pitch e de sinalização WebRTC, skip, catálogo de 58 músicas, snapshot em disco (sobrevive a restart) |
+| `apps/api` | Backend da Jam — Node + Socket.io, HTTPS 4001 + espelho HTTP 4000 | **Funcional**: sessões, fila (com convites de dueto), leaderboard, relay de pitch/WebRTC, skip, catálogo dinâmico (~340 músicas e crescendo), playcounts, importador YouTube in-app, snapshot em disco |
 | `apps/host` | Tela TV — Next.js (porta 3001, HTTP) | **Funcional**: lobby com código+QR, player com áudio real (ou synth p/ demos) + letra sincronizada, "voz na TV" (receptor + medidor de latência), pular música, resultado, leaderboard, encerramento |
 | `apps/participant` | Mobile-web — Next.js (porta 3002, HTTPS) | **Funcional**: entrar por código/QR, sessão persistente (localStorage + rejoin), fila com remoção, "sua vez" com mic + score real, toggle "voz na TV" com nível, desistir da música, resultado, ranking |
 | `apps/admin` | Painel admin | **Vazio** — não iniciado |
 | `packages/shared-types` | Contratos: Song, Jam, QueueItem, PitchCurve, ScoreResult, eventos socket | **Completo** — fonte única do protocolo |
 | `packages/ui` | `@jamroom/ui`: Button, Card, Badge, Avatar, PitchMeter, ProgressBar, cn | **Base pronta** — faltam Input, Modal, Toast, Table etc. |
 | `packages/config` | `@jamroom/config`: preset Tailwind (tokens) + tsconfig base | **Completo** |
-| `services/audio-processing` | Ingestão: pipeline IA (Demucs+pyin+Whisper) + importador UltraStar | **Funcional** — 53 músicas reais processadas; ver README do serviço |
+| `services/audio-processing` | Ingestão: pipeline IA (Demucs+pyin+LRCLIB→Whisper) + UltraStar + batch YouTube + fix_lyrics/fix_genres | **Funcional** — 330+ músicas reais processadas; ver README do serviço |
 
 ### Como rodar (4 processos)
 ```bash
@@ -76,7 +102,16 @@ contexto seguro; os celulares continuam no HTTPS 4001.
 No celular, aceitar o aviso de certificado 2x (uma vez em `https://<IP>:4001/health`, outra na
 página do participant); no PC, aceitar 1x para o host falar com a API. Também: `allowedDevOrigins`
 com o IP nos `next.config.ts` (Next 16 bloqueia assets de dev cross-origin) e regra de firewall
-inbound TCP 3001/3002/4001 (perfil Privado). IP atual configurado: 192.168.15.14.
+inbound TCP 3001/3002/4001 (perfil Privado — hoje coberto por regras por programa `node.exe`,
+que valem para a 4000 também). IP atual configurado: 192.168.15.14.
+**Host em produção** (setup atual da TV; NEXT_PUBLIC_* é embutido NO BUILD):
+```powershell
+$env:NEXT_PUBLIC_API_URL = 'http://192.168.15.14:4000'
+$env:NEXT_PUBLIC_PARTICIPANT_URL = 'https://192.168.15.14:3002'
+npm run build --workspace=host; npm run start --workspace=host   # :3001
+```
+O participant NÃO tem produção HTTPS (`next start` é http puro e o mic exige contexto
+seguro) — fica em `npm run dev:participant` até existir cert real/proxy.
 
 ### Testes (executar após mudanças no protocolo/scoring)
 ```bash
@@ -89,9 +124,12 @@ python scripts/test-real-song.py           # música real: áudio na TV + letra 
 python scripts/test-tv-mic.py              # voz na TV: conexão, pacotes PCM fluindo, som tocando
 python scripts/test-session-persistence.py # sessão do celular sobrevive a fechar o navegador
 ```
-Última execução completa: 2026-07-12, tudo verde; em 2026-07-13, test-protocol (com os 19
-asserts de dueto) e test-jam-flow re-executados verdes. Score real validado (perfeito=1000, oitava
-acima=1000, desafinado 3 semitons=242, mudo=0); voz na TV validada em hardware real pelo usuário.
+Última execução: 2026-07-14 — test-protocol com 44 asserts verdes (duetos com convite
+pré-fila, playCount, busca/import YouTube), test-jam-flow verde, test-import-e2e validou
+um import real até `catalog:new_song`, test-tv-mic verde nos DOIS contextos
+(worklet via localhost e fallback ScriptProcessor via `TV_URL=http://<IP>:3001`).
+Score real validado em 07-12 (perfeito=1000, oitava acima=1000, desafinado 3 semitons=242,
+mudo=0); voz na TV v2 validada em hardware real pelo usuário em 07-12.
 
 ### Músicas reais (pipeline de ingestão)
 `services/audio-processing/pipeline.py` (ver README do serviço): entrada = gravação original
@@ -118,13 +156,14 @@ baixa playlist/vídeo com yt-dlp (MP3 cacheado em `input/youtube/`, ffmpeg do PA
 pacote `imageio-ffmpeg`) e roda o pipeline IA em cada faixa; título/artista vêm dos
 metadados do vídeo. Mesmo enquadramento do `batch_local.py`: só estudo pessoal (viola ToS
 do YouTube), attribution registra origem e ausência de licença — jamais entra no produto.
-**Catálogo atual: 68+ músicas e crescendo** — 14 Josh Woodward (CC BY 4.0, via
+**Catálogo atual: ~340 músicas e crescendo** — 14 Josh Woodward (CC BY 4.0, via
 pipeline Demucs+pyin+Whisper) + 39 UltraStar CC (Jonathan Coulton etc. — **vários são
 CC BY-NC, não comercial**: revisar license.txt de cada pacote antes de qualquer lançamento)
-+ 5 cantigas demo synth + itens pessoais via `batch_youtube.py` (em 2026-07-13 há um lote
-de 373 músicas de playlist do usuário em processamento contínuo, ~13/h — **não licenciadas,
-uso pessoal**; retomar com o mesmo comando se interromper, progresso em
-`input/youtube/processed.txt`). Dependências Python:
++ 5 cantigas demo synth + ~280 itens pessoais via `batch_youtube.py` (lote de 373 da
+playlist do usuário quase concluído — ver seção 0; **não licenciadas, uso pessoal**;
+progresso em `input/youtube/processed.txt`). Letras: 127+ com letra sincronizada da
+LRCLIB, resto Whisper (rodar `fix_lyrics.py` de novo após o lote). Gêneros reais via
+iTunes em ~200 (rodar `fix_genres.py` após o lote). Dependências Python:
 `pip install -r services/audio-processing/requirements.txt` (torch CPU já instalado).
 **Só processar áudio licenciado** — música comercial popular exige catálogo B2B + ECAD
 (Seção 1 do plano); bancos UltraStar comunitários de hits comerciais são transcrições sem
@@ -226,7 +265,7 @@ Fonte completa: `docs/layoutDesc_extracted.txt`. Tokens em `packages/config/tail
   fixo); Admin = Linear/GitHub/Vercel (denso, tabular).
 - Reaproveitar `@jamroom/ui` + preset em qualquer app novo (ver `apps/*/tailwind.config.js`).
 
-## 5. Roadmap (estado em 2026-07-12)
+## 5. Roadmap (estado em 2026-07-14)
 
 - **Fase 0 — Fundações**: parcial. Feito: landing completa, design system, monorepo, git local.
   Pendente: auth, admin. A negociação B2B segue sendo o item de maior lead time.
@@ -236,12 +275,18 @@ Fonte completa: `docs/layoutDesc_extracted.txt`. Tokens em `packages/config/tail
   (pipeline IA e importador UltraStar) com 53 músicas reais. **Validada pelo usuário com
   microfone e rede reais.** Pendente: calibração fina em ambiente ruidoso (festa) e feature
   flag score simulado/real por sessão.
-- **Extra (fora do plano original)**: "voz na TV" — celular como microfone via WebRTC/PCM,
-  latência validada em hardware real pelo usuário. **Duetos/grupos (2026-07-13)**: convite
-  com aceite, até 4 cantores por música com score individual (cada celular captura a própria
-  voz), voz na TV mixada para até 2 aparelhos — protocolo testado
-  (`scripts/test-protocol.mjs`, 19 asserts novos); pendente validação manual com 2 celulares
-  reais.
+- **Extras (fora do plano original)**:
+  - "Voz na TV" (07-12): celular como microfone via WebRTC/PCM, latência validada em
+    hardware real; (07-14) fallback ScriptProcessor para contexto inseguro + aviso de
+    autoplay sempre visível — pendente re-validação na TV real do usuário.
+  - Duetos/grupos (07-13, convite pré-fila 07-14): popup ao adicionar → convidado
+    aceita/recusa ANTES de entrar na fila; score individual; até 2 vozes na TV;
+    pendente validação com 2 celulares reais.
+  - Catálogo v2 (07-14): abas "Mais tocadas"/gêneros no sheet, playcounts persistidos,
+    importação de músicas do YouTube pelo próprio app (fila serial no servidor,
+    hot-add no catálogo), letras sincronizadas via LRCLIB, gêneros reais via iTunes.
+  - Resiliência (07-14): espelho HTTP :4000 para TVs sem suporte a cert self-signed;
+    clients refazem attach/rejoin quando a API reinicia.
 - **Fase 3 — Monetização**: **adiada a pedido do usuário**.
 - **Fase 4 — Locação de equipamentos**: fora do escopo.
 
