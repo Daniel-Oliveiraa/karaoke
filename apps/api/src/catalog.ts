@@ -294,3 +294,24 @@ export const FULL_CATALOG: Song[] = [...PROCESSED, ...CATALOG];
 export function getSong(songId: string): Song | undefined {
   return FULL_CATALOG.find((s) => s.id === songId);
 }
+
+/**
+ * Adiciona ao catálogo (em runtime) uma música recém-processada pelo
+ * importador — mesmo critério de validação do load do boot. Retorna o Song
+ * (novo ou já existente com esse id) ou undefined se o json for inválido.
+ */
+export function addProcessedSong(songId: string): Song | undefined {
+  const existing = getSong(songId);
+  if (existing) return existing;
+  try {
+    const song = JSON.parse(
+      readFileSync(join(MEDIA_DIR, `${songId}.json`), "utf-8")
+    ) as Song;
+    if (!song.id || !song.notes?.length || !song.audioUrl) return undefined;
+    FULL_CATALOG.unshift(song); // novas primeiro, como no boot
+    return song;
+  } catch (err) {
+    console.warn(`[catalog] falha ao carregar ${songId}.json:`, err);
+    return undefined;
+  }
+}

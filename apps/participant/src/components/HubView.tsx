@@ -1,8 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Avatar, Badge, Button } from "@jamroom/ui";
-import type { Jam, Participant, Song } from "@jamroom/shared-types";
+import type {
+  ImportJob,
+  Jam,
+  Participant,
+  Song,
+  YoutubeResult,
+} from "@jamroom/shared-types";
 import { MAX_SINGERS_PER_ITEM } from "@jamroom/shared-types";
 import { getSocket } from "@/lib/socket";
 
@@ -26,6 +32,39 @@ export function HubView({
   /** Música escolhida no catálogo, aguardando o popup "chamar alguém?". */
   const [inviteSongId, setInviteSongId] = useState<string | null>(null);
   const [selectedInvitees, setSelectedInvitees] = useState<string[]>([]);
+  /** Aba do catálogo: "top" (mais tocadas), "all", "other" ou "g:<gênero>". */
+  const [catalogTab, setCatalogTab] = useState("top");
+  /** Resultados da busca no YouTube (null = modo catálogo normal). */
+  const [ytResults, setYtResults] = useState<YoutubeResult[] | null>(null);
+  const [ytSearching, setYtSearching] = useState(false);
+  /** Importações em andamento (alimentado por catalog:import_update). */
+  const [importJobs, setImportJobs] = useState<Map<string, ImportJob>>(new Map());
+
+  useEffect(() => {
+    const socket = getSocket();
+    const onImportUpdate = (job: ImportJob) => {
+      setImportJobs((prev) => {
+        const next = new Map(prev);
+        if (job.status === "queued" || job.status === "processing") {
+          next.set(job.id, job);
+        } else {
+          next.delete(job.id);
+        }
+        return next;
+      });
+      if (job.status === "done") {
+        setAddedFlash(`${job.title} entrou no catálogo!`);
+        setTimeout(() => setAddedFlash(null), 3500);
+      } else if (job.status === "failed") {
+        setAddedFlash(`Falhou a importação de ${job.title}`);
+        setTimeout(() => setAddedFlash(null), 3500);
+      }
+    };
+    socket.on("catalog:import_update", onImportUpdate);
+    return () => {
+      socket.off("catalog:import_update", onImportUpdate);
+    };
+  }, []);
 
   const ranked = useMemo(
     () => [...jam.participants].sort((a, b) => b.totalScore - a.totalScore),
@@ -36,15 +75,56 @@ export function HubView({
   const visibleQueue = jam.queue.filter((i) => i.status !== "done");
   const songsById = useMemo(() => new Map(songs.map((s) => [s.id, s] as const)), [songs]);
 
-  const filteredSongs = songs.filter((s) => {
-    const q = search.trim().toLowerCase();
-    if (!q) return true;
-    return (
-      s.title.toLowerCase().includes(q) ||
-      s.artist.toLowerCase().includes(q) ||
-      s.genre.toLowerCase().includes(q)
-    );
-  });
+  /** Gêneros com ≥2 músicas viram aba própria; o resto cai em "Outras". */
+  const genreCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const s of songs) counts.set(s.genre, (counts.get(s.genre) ?? 0) + 1);
+    return counts;
+  }, [songs]);
+
+  const catalogTabs = useMemo(() => {
+    const genres = [...genreCounts.entries()]
+      .filter(([, n]) => n >= 2)
+      .sort((a, b) => b[1] - a[1])
+      .map(([g]) => ({ id: `g:${g}`, label: g }));
+    const tabs = [
+      { id: "top", label: "Mais tocadas" },
+      { id: "all", label: "Todas" },
+      ...genres,
+    ];
+    if ([...genreCounts.values()].some((n) => n < 2)) {
+      tabs.push({ id: "other", label: "Outras" });
+    }
+    return tabs;
+  }, [genreCounts]);
+
+  const query = search.trim().toLowerCase();
+  const filteredSongs = useMemo(() => {
+    // busca com texto varre o catálogo inteiro, ignorando a aba
+    if (query) {
+      return songs.filter(
+        (s) =>
+          s.title.toLowerCase().includes(query) ||
+          s.artist.toLowerCase().includes(query) ||
+          s.genre.toLowerCase().includes(query)
+      );
+    }
+    if (catalogTab === "top") {
+      return [...songs]
+        .sort(
+          (a, b) =>
+            (b.playCount ?? 0) - (a.playCount ?? 0) ||
+            a.title.localeCompare(b.title)
+        )
+        .slice(0, 30);
+    }
+    if (catalogTab === "all") return songs;
+    if (catalogTab === "other") {
+      return songs.filter((s) => (genreCounts.get(s.genre) ?? 0) < 2);
+    }
+    const genre = catalogTab.slice(2); // "g:<gênero>"
+    return songs.filter((s) => s.genre === genre);
+  }, [songs, query, catalogTab, genreCounts]);
 
   /** Tap em "Adicionar" no catálogo: sozinho na Jam adiciona direto; com
    *  mais gente, abre o popup "chamar alguém para cantar junto?". */
@@ -70,6 +150,36 @@ export function HubView({
     );
     setTimeout(() => setAddedFlash(null), 3000);
   }
+
+  function searchYoutube() {
+    if (query.length < 2 || ytSearching) return;
+    setYtSearching(true);
+    getSocket().emit("catalog:search_youtube", search.trim(), (results) => {
+      setYtResults(results);
+      setYtSearching(false);
+    });
+  }
+
+  function importFromYoutube(r: YoutubeResult) {
+    getSocket().emit(
+      "catalog:import_youtube",
+      { videoId: r.videoId, title: r.title },
+      (res) => {
+        setAddedFlash(
+          res.ok
+            ? `Processando ${r.title} — entra no catálogo em alguns minutos`
+            : res.error ?? "Não foi possível importar"
+        );
+        setTimeout(() => setAddedFlash(null), 3500);
+        if (res.ok) setYtResults(null);
+      }
+    );
+  }
+
+  const fmtDuration = (sec: number) =>
+    `${Math.floor(sec / 60)}:${String(Math.round(sec) % 60).padStart(2, "0")}`;
+
+  const activeJobs = [...importJobs.values()];
 
   function toggleInvitee(id: string) {
     setSelectedInvitees((prev) =>
@@ -399,10 +509,13 @@ export function HubView({
             type="button"
             aria-label="Fechar"
             className="absolute inset-0 bg-black/60"
-            onClick={() => setSheetOpen(false)}
+            onClick={() => {
+              setSheetOpen(false);
+              setYtResults(null);
+            }}
           />
-          <div className="relative max-h-[80dvh] overflow-hidden rounded-t-lg border-t border-border bg-background-secondary">
-            <div className="border-b border-border p-5">
+          <div className="relative max-h-[85dvh] overflow-hidden rounded-t-lg border-t border-border bg-background-secondary">
+            <div className="border-b border-border p-5 pb-3">
               <div className="mx-auto mb-4 h-1.5 w-10 rounded-full bg-border" />
               <input
                 autoFocus
@@ -411,39 +524,136 @@ export function HubView({
                 placeholder="Buscar por título, artista ou gênero"
                 className="min-h-input w-full rounded-sm border border-border bg-surface px-4 text-body placeholder:text-foreground-muted/40 focus:border-primary focus:outline-none"
               />
-            </div>
-            <ul className="max-h-[55dvh] overflow-y-auto p-5 pt-3">
-              {filteredSongs.map((song) => (
-                <li key={song.id} className="flex items-center gap-3 py-2.5">
-                  <div
-                    className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[12px] text-lg font-bold text-white/90"
-                    style={{
-                      background: `linear-gradient(135deg, ${song.coverColors[0]}, ${song.coverColors[1]})`,
-                    }}
-                  >
-                    ♪
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-body font-semibold">{song.title}</p>
-                    <p className="truncate text-caption text-foreground-muted">
-                      {song.artist} · {Math.round(song.durationSec)}s
-                    </p>
-                  </div>
-                  <Button
-                    variant="secondary"
-                    className="px-4 py-2 text-caption"
-                    onClick={() => pickSong(song.id)}
-                  >
-                    Adicionar
-                  </Button>
-                </li>
-              ))}
-              {filteredSongs.length === 0 && (
-                <p className="py-8 text-center text-caption text-foreground-muted">
-                  Nada encontrado para “{search}”.
+
+              {/* importações em andamento */}
+              {activeJobs.length > 0 && (
+                <p className="mt-3 flex items-center gap-2 text-caption text-foreground-muted">
+                  <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-primary" />
+                  Importando: {activeJobs[0]!.title}
+                  {activeJobs.length > 1 && ` · +${activeJobs.length - 1} na fila`}
                 </p>
               )}
-            </ul>
+
+              {/* abas por gênero (a busca com texto varre tudo) */}
+              {ytResults === null && !query && (
+                <div className="-mx-5 mt-3 flex gap-2 overflow-x-auto px-5 pb-1">
+                  {catalogTabs.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setCatalogTab(t.id)}
+                      className={`shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-caption font-semibold transition-colors ${
+                        catalogTab === t.id
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-surface text-foreground-muted"
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {ytResults === null ? (
+              <ul className="max-h-[55dvh] overflow-y-auto p-5 pt-3">
+                {filteredSongs.map((song) => (
+                  <li key={song.id} className="flex items-center gap-3 py-2.5">
+                    <div
+                      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[12px] text-lg font-bold text-white/90"
+                      style={{
+                        background: `linear-gradient(135deg, ${song.coverColors[0]}, ${song.coverColors[1]})`,
+                      }}
+                    >
+                      ♪
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-body font-semibold">{song.title}</p>
+                      <p className="truncate text-caption text-foreground-muted">
+                        {song.artist} · {song.genre}
+                        {catalogTab === "top" && (song.playCount ?? 0) > 0 && !query
+                          ? ` · ${song.playCount}x cantada`
+                          : ""}
+                      </p>
+                    </div>
+                    <Button
+                      variant="secondary"
+                      className="px-4 py-2 text-caption"
+                      onClick={() => pickSong(song.id)}
+                    >
+                      Adicionar
+                    </Button>
+                  </li>
+                ))}
+                {filteredSongs.length === 0 && (
+                  <p className="py-6 text-center text-caption text-foreground-muted">
+                    Nada encontrado para “{search}” no catálogo.
+                  </p>
+                )}
+                {query.length >= 2 && (
+                  <li className="pt-2">
+                    <Button
+                      variant="secondary"
+                      className="w-full justify-center py-3 text-caption font-semibold"
+                      disabled={ytSearching}
+                      onClick={searchYoutube}
+                    >
+                      {ytSearching
+                        ? "Buscando no YouTube..."
+                        : `▶ Buscar “${search.trim()}” no YouTube`}
+                    </Button>
+                  </li>
+                )}
+              </ul>
+            ) : (
+              <div className="max-h-[55dvh] overflow-y-auto p-5 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setYtResults(null)}
+                  className="mb-2 text-caption font-semibold text-foreground-muted transition-colors hover:text-foreground"
+                >
+                  ← Voltar ao catálogo
+                </button>
+                <ul>
+                  {ytResults.map((r) => (
+                    <li key={r.videoId} className="flex items-center gap-3 py-2.5">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={r.thumbnailUrl}
+                        alt=""
+                        className="h-12 w-12 shrink-0 rounded-[12px] object-cover"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="line-clamp-2 text-caption font-semibold leading-snug">
+                          {r.title}
+                        </p>
+                        <p className="truncate text-caption text-foreground-muted">
+                          {r.channel}
+                          {r.durationSec > 0 && ` · ${fmtDuration(r.durationSec)}`}
+                        </p>
+                      </div>
+                      <Button
+                        variant="secondary"
+                        className="shrink-0 px-3 py-2 text-caption"
+                        onClick={() => importFromYoutube(r)}
+                      >
+                        + Catálogo
+                      </Button>
+                    </li>
+                  ))}
+                  {ytResults.length === 0 && (
+                    <p className="py-8 text-center text-caption text-foreground-muted">
+                      Nada encontrado no YouTube.
+                    </p>
+                  )}
+                </ul>
+                <p className="mt-3 text-center text-caption text-foreground-muted/70">
+                  Baixe a versão original com voz — o sistema remove o vocal e
+                  sincroniza a letra (~5 min). Para uso pessoal; músicas
+                  comerciais não são licenciadas.
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}

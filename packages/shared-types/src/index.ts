@@ -56,6 +56,11 @@ export interface Song {
   audioUrl?: string | null;
   /** Atribuição obrigatória da licença (ex: "CC BY 4.0 — Josh Woodward"). */
   attribution?: string;
+  /**
+   * Reproduções globais (todas as Jams) — preenchido pela API na resposta
+   * de catalog:get; alimenta a aba "Mais tocadas".
+   */
+  playCount?: number;
 }
 
 /** Versão leve da música para listagens (busca no participant). */
@@ -184,6 +189,30 @@ export interface MicSignalData {
 }
 
 // ---------------------------------------------------------------------------
+// Importação de músicas pelo app (busca no YouTube → pipeline no servidor)
+// ---------------------------------------------------------------------------
+
+/** Resultado de busca no YouTube (catalog:search_youtube). */
+export interface YoutubeResult {
+  videoId: string;
+  title: string;
+  channel: string;
+  durationSec: number;
+  thumbnailUrl: string;
+}
+
+/** Estado de um pedido de importação (broadcast em catalog:import_update). */
+export interface ImportJob {
+  id: string;
+  videoId: string;
+  title: string;
+  status: "queued" | "processing" | "done" | "failed";
+  /** Preenchido quando status === "done". */
+  songId?: string;
+  error?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Protocolo Socket.io
 // ---------------------------------------------------------------------------
 
@@ -274,8 +303,22 @@ export interface ClientToServerEvents {
   /** Sinalização WebRTC do host → um participante específico. */
   "host:mic_signal": (participantId: string, data: MicSignalData) => void;
 
-  /** Catálogo de músicas (com letra + melodia). */
+  /** Catálogo de músicas (com letra + melodia + playCount). */
   "catalog:get": (cb: (songs: Song[]) => void) => void;
+  /** Busca vídeos no YouTube para importar ao catálogo (uso pessoal). */
+  "catalog:search_youtube": (
+    query: string,
+    cb: (results: YoutubeResult[]) => void
+  ) => void;
+  /**
+   * Pede a importação de um vídeo: baixa, remove a voz (Demucs) e busca a
+   * letra (LRCLIB→Whisper) no servidor. Fila serial; progresso via
+   * catalog:import_update e a música pronta via catalog:new_song.
+   */
+  "catalog:import_youtube": (
+    payload: { videoId: string; title: string },
+    cb: (res: { ok: boolean; error?: string }) => void
+  ) => void;
 }
 
 /** Eventos que o servidor emite para os clients. */
@@ -295,6 +338,10 @@ export interface ServerToClientEvents {
     participantId: string;
     data: MicSignalData;
   }) => void;
+  /** Progresso de uma importação do YouTube (broadcast global). */
+  "catalog:import_update": (job: ImportJob) => void;
+  /** Música nova pronta no catálogo — clients dão append na lista local. */
+  "catalog:new_song": (song: Song) => void;
 }
 
 // ---------------------------------------------------------------------------

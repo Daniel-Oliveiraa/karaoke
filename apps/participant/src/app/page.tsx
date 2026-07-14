@@ -40,8 +40,13 @@ export default function ParticipantPage() {
       // Jam acabou: a sessão salva não vale mais para a próxima visita
       if (j.status === "ended") localStorage.removeItem(SESSION_KEY);
     };
+    const onNewSong = (song: Song) =>
+      setSongs((prev) =>
+        prev.some((s) => s.id === song.id) ? prev : [song, ...prev]
+      );
     socket.on("jam:state", onState);
     socket.on("jam:ended", onState);
+    socket.on("catalog:new_song", onNewSong);
 
     const urlCode = new URLSearchParams(window.location.search).get("code");
     const saved = localStorage.getItem(SESSION_KEY);
@@ -88,6 +93,7 @@ export default function ParticipantPage() {
       clearTimeout(failsafe);
       socket.off("jam:state", onState);
       socket.off("jam:ended", onState);
+      socket.off("catalog:new_song", onNewSong);
     };
   }, []);
 

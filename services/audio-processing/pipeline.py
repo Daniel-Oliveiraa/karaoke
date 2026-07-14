@@ -278,12 +278,22 @@ def main() -> None:
             dest_audio = MEDIA_DIR / f"{args.id}{instrumental.suffix.lower()}"
             shutil.copyfile(instrumental, dest_audio)
 
+        # genero real via iTunes quando ninguem informou (default generico)
+        genre = args.genre
+        if genre == "Pop/Rock":
+            try:
+                from fix_genres import itunes_genre
+
+                genre = itunes_genre(args.title, args.artist) or genre
+            except ImportError:
+                pass
+
         colors = PALETTE[sum(ord(c) for c in args.id) % len(PALETTE)]
         song = {
             "id": args.id,
             "title": args.title,
             "artist": args.artist,
-            "genre": args.genre,
+            "genre": genre,
             "bpm": estimate_bpm(original),
             "durationSec": round(audio_duration(instrumental), 3),
             "coverColors": list(colors),

@@ -56,13 +56,20 @@ export default function SessionPage({
     const onState = (j: Jam) => setJam(j);
     const onPitch = (p: LivePitch) =>
       setPitches((prev) => new Map(prev).set(p.participantId, p));
+    // música importada pelo app entra no catálogo da TV sem refresh
+    const onNewSong = (song: Song) =>
+      setSongs((prev) =>
+        prev.some((s) => s.id === song.id) ? prev : [song, ...prev]
+      );
     socket.on("jam:state", onState);
     socket.on("jam:pitch", onPitch);
     socket.on("jam:ended", onState);
+    socket.on("catalog:new_song", onNewSong);
     return () => {
       socket.off("jam:state", onState);
       socket.off("jam:pitch", onPitch);
       socket.off("jam:ended", onState);
+      socket.off("catalog:new_song", onNewSong);
     };
   }, [code]);
 

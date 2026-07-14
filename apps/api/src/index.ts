@@ -15,6 +15,8 @@ import {
   acceptedSingerIds,
 } from "@jamroom/shared-types";
 import { FULL_CATALOG, MEDIA_DIR, getSong } from "./catalog";
+import { requestImport, searchYoutube, setImporterListeners } from "./importer";
+import { bumpPlayCount, playCountOf } from "./playcounts";
 import {
   addParticipant,
   addToQueue,
@@ -198,9 +200,35 @@ function maybeFinishCurrentSong(code: string): void {
   }
 }
 
+// broadcasts do importador (progresso + música nova) para todos os clients
+setImporterListeners(
+  (job) => io.emit("catalog:import_update", job),
+  (song) => io.emit("catalog:new_song", song)
+);
+
+function catalogWithCounts() {
+  return FULL_CATALOG.map((s) => ({ ...s, playCount: playCountOf(s.id) }));
+}
+
 io.on("connection", (socket: JamSocket) => {
   // ---------------------------------------------------------------- catálogo
-  socket.on("catalog:get", (cb) => cb(FULL_CATALOG));
+  socket.on("catalog:get", (cb) => cb(catalogWithCounts()));
+
+  socket.on("catalog:search_youtube", (query, cb) => {
+    if (socket.data.role !== "participant" || typeof query !== "string") {
+      cb([]);
+      return;
+    }
+    void searchYoutube(query).then(cb);
+  });
+
+  socket.on("catalog:import_youtube", ({ videoId, title }, cb) => {
+    if (socket.data.role !== "participant") {
+      cb({ ok: false, error: "só participantes importam" });
+      return;
+    }
+    cb(requestImport(videoId, title ?? ""));
+  });
 
   // -------------------------------------------------------------------- host
   socket.on("host:create", (cb) => {
@@ -237,6 +265,7 @@ io.on("connection", (socket: JamSocket) => {
     record.jam.songStartedAt = Date.now();
     record.jam.lastResults = [];
     record.pendingScores = new Map();
+    bumpPlayCount(item.songId); // aba "Mais tocadas"
     broadcastState(code);
   });
 

@@ -80,7 +80,8 @@ inbound TCP 3001/3002/4001 (perfil Privado). IP atual configurado: 192.168.15.14
 
 ### Testes (executar após mudanças no protocolo/scoring)
 ```bash
-node scripts/test-protocol.mjs             # protocolo completo, incl. duetos (API de pé com INVITE_TIMEOUT_MS=2000)
+node scripts/test-protocol.mjs             # protocolo completo, incl. duetos, playCount e import dedupe (API de pé com INVITE_TIMEOUT_MS=2000)
+node scripts/test-import-e2e.mjs "artista musica"  # LENTO (~5-10min): import real do YouTube via socket até catalog:new_song
 node scripts/test-persistence.mjs create   # + kill/restart da API + `verify <code> <pid>`: snapshot
 npx tsx scripts/test-scoring.ts            # algoritmo de score com performances sintéticas
 python scripts/test-jam-flow.py            # fluxo completo em navegador (Playwright, mic fake)
@@ -160,6 +161,18 @@ licença e NÃO devem ser importados em massa no produto.
   playback sintetizado) + músicas reais processadas pelo pipeline em `apps/api/media/*.json`
   (playback de instrumental MP3 real). O mesmo formato `Song` cobre os dois casos — a
   diferença é só `audioUrl` presente ou não. Com catálogo B2B: mover os JSONs para Postgres.
+- **Catálogo v2 (2026-07-14)**: sheet do participant tem abas — "Mais tocadas" (default,
+  por `Song.playCount`, contagem global persistida em `apps/api/data/playcounts.json` via
+  `playcounts.ts`, incrementada no `host:start_song`), "Todas", uma por gênero (≥2 músicas)
+  e "Outras". **Importação pelo app**: busca no YouTube (`catalog:search_youtube`, yt-dlp
+  flat) e `catalog:import_youtube {videoId,title}` → fila SERIAL em `apps/api/src/importer.ts`
+  (máx 5 pendentes; spawna `batch_youtube.py <url>`, que imprime `RESULT <slug> ok|skip`);
+  progresso via `catalog:import_update` (broadcast), música pronta via `catalog:new_song`
+  (hot-add com `addProcessedSong` no catalog.ts; participant e host dão append sem refresh).
+  `PYTHON_BIN` env aponta o Python (default "python"). Import = uso pessoal, não licenciado.
+- **Gêneros reais**: `fix_genres.py` (backfill) e o pipeline consultam a iTunes Search API
+  (grátis, sem chave, `country=BR` → "Sertanejo", "MPB"...) quando o gênero é o default
+  "Pop/Rock"; ids corrigidos em `lyrics_backup/genres_fixed.txt`.
 - **Pitch detection**: 100% client-side no celular (privacidade/latência/custo, decisão do plano).
   AudioWorklet + autocorrelação NSDF/McLeod em JS puro (`apps/participant/src/lib/pitchDetector.ts`),
   janela 2048, decimação 3x, faixa 80–1000 Hz. Trocar por pYIN/aubio-WASM não muda a interface.

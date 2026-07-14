@@ -30,7 +30,7 @@ function expect(cond, msg) {
 const host = connect();
 const part = connect();
 
-const timeout = setTimeout(() => fail("timeout geral (45s)"), 45000);
+const timeout = setTimeout(() => fail("timeout geral (150s)"), 150000);
 
 const hostStates = [];
 host.on("jam:state", (j) => hostStates.push(j));
@@ -358,7 +358,53 @@ expect(
   "todos desistiram: música pulada sem resultado"
 );
 
-// 23. host encerra
+// 23. playCount global refletido no catálogo
+const songsAfter = await new Promise((res) => part.emit("catalog:get", res));
+const played = songsAfter.find((s) => s.id === song.id);
+expect(
+  (played?.playCount ?? 0) >= 5,
+  `playCount da música testada subiu para ${played?.playCount}`
+);
+
+// 24. busca no YouTube (rede real; pulada com aviso se offline)
+const ytResults = await new Promise((res) => {
+  const t = setTimeout(() => res(null), 30000);
+  part.emit("catalog:search_youtube", "josh woodward swansong", (r) => {
+    clearTimeout(t);
+    res(r);
+  });
+});
+if (ytResults?.length) {
+  expect(
+    ytResults[0].videoId && ytResults[0].title && ytResults[0].thumbnailUrl,
+    `busca no YouTube retornou ${ytResults.length} resultado(s)`
+  );
+} else {
+  console.log("aviso: busca no YouTube vazia (sem rede?) — assert pulado");
+}
+
+// 25. importar vídeo JÁ processado resolve rápido via dedupe (sem Demucs)
+const importUpdates = [];
+host.on("catalog:import_update", (j) => importUpdates.push(j));
+const ack = await new Promise((res) =>
+  part.emit(
+    "catalog:import_youtube",
+    { videoId: "J7aH2wyPEvU", title: "Josh Woodward - Swansong" }, // já no catálogo
+    res
+  )
+);
+expect(ack.ok, "pedido de importação aceito");
+let doneJob = null;
+for (let i = 0; i < 150 && !doneJob; i++) {
+  await wait(500);
+  doneJob = importUpdates.find((j) => j.status === "done" || j.status === "failed");
+}
+expect(
+  doneJob?.status === "done" && doneJob.songId === "josh-woodward-swansong",
+  "import de vídeo já processado resolveu via dedupe"
+);
+
+// 26. host encerra
 const endedPromise = new Promise((res) => part.once("jam:ended", res));
 host.emit("host:end_jam");
 const ended = await endedPromise;

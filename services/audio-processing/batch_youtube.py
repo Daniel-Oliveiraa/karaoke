@@ -69,6 +69,9 @@ def title_artist(info: dict) -> tuple[str, str]:
     if not title:
         if not artist and " - " in raw_title:
             artist, _, title = (p.strip() for p in raw_title.partition(" - "))
+        elif not artist and ": " in raw_title:
+            # formato 'Artista: "Titulo"' (comum em canais de artista)
+            artist, _, title = (p.strip() for p in raw_title.partition(": "))
         else:
             title = raw_title
     if not artist:
@@ -80,6 +83,7 @@ def title_artist(info: dict) -> tuple[str, str]:
         title,
         flags=re.IGNORECASE,
     ).strip() or raw_title
+    title = title.strip(" \"'“”") or raw_title
     return title, artist
 
 
@@ -172,6 +176,7 @@ def main() -> None:
 
         if (MEDIA / f"{slug}.json").exists():
             print(f"= {label} (ja importada)")
+            print(f"RESULT {slug} skip", flush=True)  # parseado pelo importer da API
             skipped += 1
             mark_done(info["id"])
             continue
@@ -202,6 +207,7 @@ def main() -> None:
             subprocess.run(cmd, check=True)
             ok += 1
             mark_done(info["id"])
+            print(f"RESULT {slug} ok", flush=True)  # parseado pelo importer da API
         except Exception as e:  # noqa: BLE001
             fail.append(f"{artist} - {title}")
             print(f"FALHOU {label}: {e}")
