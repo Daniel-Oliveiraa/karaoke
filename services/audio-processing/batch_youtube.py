@@ -35,6 +35,12 @@ from pathlib import Path
 
 from pipeline import find_ffmpeg
 
+# titulos de video trazem qualquer unicode; o console/arquivo de log no
+# Windows nasce cp1252 e um print com acento combinado derruba o lote
+for stream in (sys.stdout, sys.stderr):
+    if stream and hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
 HERE = Path(__file__).resolve().parent
 INPUT = HERE / "input" / "youtube"
 MEDIA = HERE.parents[1] / "apps" / "api" / "media"
