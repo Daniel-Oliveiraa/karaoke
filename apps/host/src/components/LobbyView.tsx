@@ -77,8 +77,8 @@ export function LobbyView({
 
       {/* conteúdo: grid de duas colunas ocupando o espaço restante */}
       <div className="grid flex-1 grid-cols-[1.2fr_1fr] items-center gap-12 py-10">
-        {/* Coluna esquerda: entrada na Jam */}
-        <section className="flex flex-col items-start gap-9">
+        {/* Coluna esquerda: entrada na Jam — tudo centralizado no painel */}
+        <section className="flex flex-col items-center justify-center gap-9 text-center">
           <div>
             <p className="text-title font-bold">
               Sua Jam <span className="text-primary">está aberta!</span>
@@ -116,19 +116,6 @@ export function LobbyView({
               {jam.code}
             </p>
           </div>
-
-          {showingNext && (
-            <div className="rounded-lg border border-primary/40 bg-primary/10 px-8 py-6">
-              <p className="text-body text-foreground-muted">A seguir</p>
-              <p className="mt-1 text-title font-bold">
-                {nextSong!.title}
-                <span className="font-medium text-foreground-muted"> · {singerNames(next!)}</span>
-              </p>
-              <p className="mt-2 text-subtitle font-semibold text-primary">
-                Começando em {countdown}...
-              </p>
-            </div>
-          )}
         </section>
 
         {/* Coluna direita: quem chegou + fila + ranking */}
@@ -198,7 +185,7 @@ export function LobbyView({
         </section>
       </div>
 
-      {/* rodapé: status da Jam (escondido quando o card "A seguir" já comunica isso) */}
+      {/* rodapé: status da Jam (escondido quando o popup "A seguir" já comunica isso) */}
       {!showingNext && (
         <footer className="flex items-center justify-center gap-2.5 text-subtitle text-foreground-muted">
           <PeopleIcon className="h-6 w-6 text-primary" />
@@ -206,6 +193,22 @@ export function LobbyView({
             ? "Aguardando mais pessoas..."
             : "Adicionem músicas à fila pelo celular para começar! 🎤"}
         </footer>
+      )}
+
+      {/* popup "A seguir": centralizado na tela inteira, não só na coluna */}
+      {showingNext && (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-background/80 backdrop-blur-glass">
+          <div className="rounded-lg border border-primary/40 bg-primary/10 px-12 py-10 text-center shadow-[0_0_60px_rgba(124,58,237,0.35)]">
+            <p className="text-body text-foreground-muted">A seguir</p>
+            <p className="mt-1 text-title font-bold">
+              {nextSong!.title}
+              <span className="font-medium text-foreground-muted"> · {singerNames(next!)}</span>
+            </p>
+            <p className="mt-2 text-subtitle font-semibold text-primary">
+              Começando em {countdown}...
+            </p>
+          </div>
+        </div>
       )}
     </main>
   );
