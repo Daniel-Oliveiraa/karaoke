@@ -49,6 +49,10 @@ class PcmPlayer extends AudioWorkletProcessor {
     this.started = false;
     this.underruns = 0;
     this.lastReport = 0;
+    this.sumSq = 0;   // energia emitida desde o ultimo report (diagnostico)
+    this.sumN = 0;
+    this.inSumSq = 0; // energia RECEBIDA da rede desde o ultimo report
+    this.inN = 0;
     this.port.onmessage = (e) => {
       const d = e.data;
       if (d && d.type === "config") {
@@ -61,8 +65,11 @@ class PcmPlayer extends AudioWorkletProcessor {
       }
       const pcm = new Int16Array(d);
       for (let i = 0; i < pcm.length; i++) {
-        this.ring[this.writeIdx % this.ring.length] = pcm[i] / 0x8000;
+        const v = pcm[i] / 0x8000;
+        this.ring[this.writeIdx % this.ring.length] = v;
         this.writeIdx++;
+        this.inSumSq += v * v;
+        this.inN++;
       }
     };
   }
@@ -96,6 +103,8 @@ class PcmPlayer extends AudioWorkletProcessor {
       const a = this.ring[idx % this.ring.length];
       const b = this.ring[(idx + 1) % this.ring.length];
       out[i] = a + (b - a) * frac;
+      this.sumSq += out[i] * out[i];
+      this.sumN++;
       this.readIdx += ratio;
     }
 
@@ -109,8 +118,12 @@ class PcmPlayer extends AudioWorkletProcessor {
         fillMs: (this.fill() / this.srcRate) * 1000,
         underruns: this.underruns,
         started: this.started,
+        outRms: this.sumN ? Math.sqrt(this.sumSq / this.sumN) : 0,
+        inRms: this.inN ? Math.sqrt(this.inSumSq / this.inN) : 0,
       });
       this.underruns = 0;
+      this.sumSq = 0; this.sumN = 0;
+      this.inSumSq = 0; this.inN = 0;
     }
     return true;
   }
@@ -134,6 +147,11 @@ interface Peer {
   lastFillMs: number;
   packets: number;
   bytes: number;
+  // diagnóstico vindo do worklet (report de 1s)
+  workletInRms: number;
+  workletOutRms: number;
+  workletStarted: boolean;
+  underruns: number;
 }
 
 export function createMicReceiver(
@@ -245,7 +263,13 @@ export function createMicReceiver(
       outputChannelCount: [1],
     });
     node.port.onmessage = (e) => {
-      if (typeof e.data?.fillMs === "number") peer.lastFillMs = e.data.fillMs;
+      if (typeof e.data?.fillMs === "number") {
+        peer.lastFillMs = e.data.fillMs;
+        peer.workletInRms = e.data.inRms ?? 0;
+        peer.workletOutRms = e.data.outRms ?? 0;
+        peer.workletStarted = Boolean(e.data.started);
+        peer.underruns += e.data.underruns ?? 0;
+      }
     };
     const gain = ctx!.createGain();
     node.connect(gain).connect(voiceBus!);
@@ -302,6 +326,10 @@ export function createMicReceiver(
         bytes: peer.bytes,
         fillMs: Math.round(peer.lastFillMs),
         connection: peer.pc.connectionState,
+        inRms: Math.round(peer.workletInRms * 10000) / 10000,
+        outRms: Math.round(peer.workletOutRms * 10000) / 10000,
+        started: peer.workletStarted,
+        underruns: peer.underruns,
       };
     }
     // diagnóstico acessível no console da TV: window.__tvmic
@@ -330,6 +358,10 @@ export function createMicReceiver(
       lastFillMs: TARGET_BUFFER_MS,
       packets: 0,
       bytes: 0,
+      workletInRms: 0,
+      workletOutRms: 0,
+      workletStarted: false,
+      underruns: 0,
     };
     peers.set(participantId, peer);
 

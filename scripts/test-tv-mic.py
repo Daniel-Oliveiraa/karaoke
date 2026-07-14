@@ -85,15 +85,23 @@ def main():
         time.sleep(2)
         dbg2 = tv.evaluate("window.__tvmic")
         print("debug tv:", dbg2)
+        # o celular acusa captura muda? (mic ocupado/silencioso)
+        mute_warn = phone.locator("text=Sem sinal de voz").count()
+        print(f"debug celular: aviso de captura muda visivel = {bool(mute_warn)}")
         if not dbg2 or dbg2.get("ctxState") != "running":
             raise AssertionError(f"AudioContext da TV nao esta tocando: {dbg2}")
         if total_packets(dbg2) <= total_packets(dbg1):
             raise AssertionError(f"pacotes de voz nao estao fluindo: {dbg1} -> {dbg2}")
-        # RMS medido no barramento de voz: prova que o audio decodificado
-        # chega ao mixer (o mic fake do Playwright emite um tom continuo)
-        if dbg2.get("outputRms", 0) <= 0.0005:
-            raise AssertionError(f"sinal de audio zerado no mixer da TV: {dbg2}")
-        print("ok - pacotes PCM fluindo, mixer com sinal e AudioContext tocando")
+        # outRms do worklet = RMS emitido ao mixer, MEDIA de 1s inteiro.
+        # (o outputRms do analyser e um snapshot de ~43ms e cai no silencio
+        # entre os bips do mic fake — nao serve de assert)
+        worklet_rms = max(
+            (v.get("outRms", 0) for v in dbg2.values() if isinstance(v, dict)),
+            default=0,
+        )
+        if worklet_rms <= 0.005:
+            raise AssertionError(f"worklet emitindo silencio ao mixer: {dbg2}")
+        print(f"ok - pacotes PCM fluindo e worklet emitindo sinal (rms {worklet_rms})")
 
         tv.screenshot(path=f"{SHOTS}/tvmic_1_tv_meter.png")
         phone.screenshot(path=f"{SHOTS}/tvmic_2_phone_toggle.png")
