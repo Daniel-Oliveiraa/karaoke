@@ -37,6 +37,8 @@ export function HubView({
   /** Resultados da busca no YouTube (null = modo catálogo normal). */
   const [ytResults, setYtResults] = useState<YoutubeResult[] | null>(null);
   const [ytSearching, setYtSearching] = useState(false);
+  /** Vídeo com prévia aberta na lista do YouTube (só um por vez). */
+  const [previewVideoId, setPreviewVideoId] = useState<string | null>(null);
   /** Importações em andamento (alimentado por catalog:import_update). */
   const [importJobs, setImportJobs] = useState<Map<string, ImportJob>>(new Map());
 
@@ -171,6 +173,7 @@ export function HubView({
             : res.error ?? "Não foi possível importar"
         );
         setTimeout(() => setAddedFlash(null), 3500);
+        setPreviewVideoId(null); // não deixa a prévia tocando escondida
         if (res.ok) setYtResults(null);
       }
     );
@@ -542,6 +545,7 @@ export function HubView({
             onClick={() => {
               setSheetOpen(false);
               setYtResults(null);
+              setPreviewVideoId(null);
             }}
           />
           <div className="relative max-h-[85dvh] overflow-hidden rounded-t-lg border-t border-border bg-background-secondary">
@@ -639,38 +643,65 @@ export function HubView({
               <div className="max-h-[55dvh] overflow-y-auto p-5 pt-3">
                 <button
                   type="button"
-                  onClick={() => setYtResults(null)}
+                  onClick={() => {
+                    setYtResults(null);
+                    setPreviewVideoId(null);
+                  }}
                   className="mb-2 text-caption font-semibold text-foreground-muted transition-colors hover:text-foreground"
                 >
                   ← Voltar ao catálogo
                 </button>
                 <ul>
-                  {ytResults.map((r) => (
-                    <li key={r.videoId} className="flex items-center gap-3 py-2.5">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={r.thumbnailUrl}
-                        alt=""
-                        className="h-12 w-12 shrink-0 rounded-[12px] object-cover"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="line-clamp-2 text-caption font-semibold leading-snug">
-                          {r.title}
-                        </p>
-                        <p className="truncate text-caption text-foreground-muted">
-                          {r.channel}
-                          {r.durationSec > 0 && ` · ${fmtDuration(r.durationSec)}`}
-                        </p>
-                      </div>
-                      <Button
-                        variant="secondary"
-                        className="shrink-0 px-3 py-2 text-caption"
-                        onClick={() => importFromYoutube(r)}
-                      >
-                        + Catálogo
-                      </Button>
-                    </li>
-                  ))}
+                  {ytResults.map((r) => {
+                    const previewing = previewVideoId === r.videoId;
+                    return (
+                      <li key={r.videoId} className="py-2.5">
+                        <div className="flex items-center gap-3">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={r.thumbnailUrl}
+                            alt=""
+                            className="h-12 w-12 shrink-0 rounded-[12px] object-cover"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="line-clamp-2 text-caption font-semibold leading-snug">
+                              {r.title}
+                            </p>
+                            <p className="truncate text-caption text-foreground-muted">
+                              {r.channel}
+                              {r.durationSec > 0 && ` · ${fmtDuration(r.durationSec)}`}
+                            </p>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            className="shrink-0 px-3 py-2 text-caption"
+                            onClick={() =>
+                              setPreviewVideoId(previewing ? null : r.videoId)
+                            }
+                          >
+                            {previewing ? "✕ Fechar" : "▶ Prévia"}
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            className="shrink-0 px-3 py-2 text-caption"
+                            onClick={() => importFromYoutube(r)}
+                          >
+                            + Catálogo
+                          </Button>
+                        </div>
+                        {previewing && (
+                          <iframe
+                            key={r.videoId}
+                            className="mt-2.5 aspect-video w-full rounded-[12px]"
+                            src={`https://www.youtube.com/embed/${r.videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1`}
+                            title={`Prévia: ${r.title}`}
+                            allow="autoplay; encrypted-media"
+                            allowFullScreen
+                          />
+                        )}
+                      </li>
+                    );
+                  })}
                   {ytResults.length === 0 && (
                     <p className="py-8 text-center text-caption text-foreground-muted">
                       Nada encontrado no YouTube.

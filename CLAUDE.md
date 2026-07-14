@@ -218,7 +218,14 @@ licença e NÃO devem ser importados em massa no produto.
   e "Outras". **Importação pelo app**: busca no YouTube (`catalog:search_youtube`, yt-dlp
   flat) e `catalog:import_youtube {videoId,title}` → fila SERIAL em `apps/api/src/importer.ts`
   (máx 5 pendentes; spawna `batch_youtube.py <url>`, que imprime `RESULT <slug> ok|skip`);
-  progresso via `catalog:import_update` (broadcast), música pronta via `catalog:new_song`
+  progresso via `catalog:import_update` (broadcast), música pronta via `catalog:new_song`.
+  **Prévia antes de importar (2026-07-15)**: cada resultado do YouTube tem um botão
+  "▶ Prévia" que expande inline o embed oficial (`youtube.com/embed/<videoId>`, 100%
+  client-side, sem tocar o servidor) — deixa o usuário confirmar que é a versão certa
+  antes de disparar os ~5min de processamento. Só uma prévia aberta por vez
+  (`previewVideoId` em HubView.tsx); fecha ao importar, voltar ao catálogo ou fechar o
+  sheet. Nada a ver com a decisão antiga de não usar YouTube embed como fonte de
+  reprodução do produto (essa é só uma prévia client-side, não o player da Jam).
   (hot-add com `addProcessedSong` no catalog.ts; participant e host dão append sem refresh).
   `PYTHON_BIN` env aponta o Python (default "python"). Import = uso pessoal, não licenciado.
   **Progresso real por estágio (2026-07-14)**: `ImportJob` ganhou `requesterId`, `progress`
