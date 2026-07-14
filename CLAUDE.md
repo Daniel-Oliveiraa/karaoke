@@ -260,19 +260,32 @@ licença e NÃO devem ser importados em massa no produto.
 - **Fluxo da TV é autônomo**: countdown de 5s inicia a próxima da fila, resultado fica 8s e volta.
   A TV é "um palco" (sem interação); o controle remoto do anfitrião virá com o dashboard.
 - **Sem auth ainda**: qualquer um cria Jam. Auth entra junto com o dashboard do anfitrião.
-- **"Voz na TV" (protótipo v2, 2026-07-12)**: toggle experimental no SingView transmite a voz
-  do cantor para a TV (celular como microfone). v1 usava track Opus do WebRTC — o jitter
-  buffer NetEq do Chrome tem piso de ~40–80ms e o usuário mediu >150ms em hardware real.
-  v2 fura esse piso: **PCM Int16 cru em pacotes de 8ms via RTCDataChannel não-confiável/
-  não-ordenado**, playback na TV por AudioWorklet com **ring buffer próprio de 30ms**
+- **"Voz na TV" (protótipo v2, 2026-07-12; latência afinada em 2026-07-15)**: toggle
+  experimental no SingView transmite a voz do cantor para a TV (celular como microfone).
+  v1 usava track Opus do WebRTC — o jitter buffer NetEq do Chrome tem piso de ~40–80ms e
+  o usuário mediu >150ms em hardware real. v2 fura esse piso: **PCM Int16 cru via
+  RTCDataChannel não-confiável/não-ordenado**, playback na TV com **ring buffer próprio**
   (resampling linear entre taxas; excesso descartado — atraso nunca acumula; underrun
   reacumula até o alvo). Captura crua no celular, saída WebAudio "interactive" + reverb
   curto (mascara o residual). Medidor na TV mostra números medidos (buffer real + RTT/2 +
   saída). Sinalização via Socket.io (mesmos eventos mic_signal). Arquivos:
-  `apps/participant/src/lib/tvMic.ts`, `apps/host/src/lib/micReceiver.ts`. Teste:
-  `python scripts/test-tv-mic.py` (headless: estável 57–87ms). Fatores fora do código que
-  dominam a latência real: caixa Bluetooth (+100–300ms — usar HDMI/cabo), "modo jogo" da TV
-  (TVs processam áudio, 20–100ms), Wi-Fi 5GHz. Mic dedicado (Fase 4) segue sendo o premium.
+  `apps/participant/src/lib/tvMic.ts`, `apps/host/src/lib/micReceiver.ts`.
+  **Tuning de latência (07-15)**, validado pelo usuário em hardware real ("funcionou bem"):
+  pacote de captura reduzido de 3 chunks/8ms para **1 chunk/~2.7ms** (`CHUNKS_PER_PACKET`
+  em tvMic.ts — 1 render quantum, o mínimo possível). Buffer de reprodução **diferenciado
+  por motor**: `WORKLET_BUFFER_MS = 20` (thread de áudio dedicada, aguenta ser agressivo;
+  era 30) vs `SCRIPT_PROCESSOR_BUFFER_MS = 30` (fallback de contexto inseguro — roda na
+  thread principal, mais sujeito a jank; **é o motor que a TV real do usuário usa** via
+  `http://<IP>`, então ficou deliberadamente mais conservador — em 20ms o teste mostrou 1
+  underrun nesse motor). Resultado no teste headless: worklet caiu de mínimo 57ms para
+  **37ms**; ambos os motores com 0 underruns nos parâmetros finais. Teste:
+  `python scripts/test-tv-mic.py` (worklet) e `TV_URL=http://<IP>:3001 python
+  scripts/test-tv-mic.py` (fallback) — **não reproduz jitter de rede real**, só prova que
+  o código não quebra; a validação de crepitar/engasgar de verdade é no ambiente de festa.
+  Se precisar mais folga num motor específico, é só subir a constante correspondente.
+  Fatores fora do código que dominam a latência real: caixa Bluetooth (+100–300ms — usar
+  HDMI/cabo), "modo jogo" da TV (TVs processam áudio, 20–100ms), Wi-Fi 5GHz. Mic dedicado
+  (Fase 4) segue sendo o premium.
 
 ## 3. O que NÃO foi feito (pendências conhecidas)
 - `apps/admin` (CRUD de catálogo, gestão de licenciamento, monitor de jams) — pasta vazia.

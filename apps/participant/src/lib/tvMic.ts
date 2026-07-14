@@ -9,17 +9,22 @@ import { getSocket } from "./socket";
  * Em vez de um track de áudio WebRTC (Opus + jitter buffer NetEq do Chrome,
  * piso de ~40–80ms que não controlamos), enviamos PCM cru (Int16) por um
  * RTCDataChannel não-confiável e não-ordenado. Na LAN a banda sobra
- * (~768kbps) e o buffer de reprodução passa a ser nosso (~30ms, na TV).
+ * (bem abaixo de 1Mbps mesmo com pacotes pequenos) e o buffer de
+ * reprodução passa a ser nosso (ver TARGET_BUFFER_MS no micReceiver da TV).
  *
- * Pacotes de 384 amostras (8ms @48kHz). Perda de pacote = 8ms de silêncio,
- * imperceptível numa festa; atraso acumulado nunca cresce porque pacotes
- * atrasados são simplesmente descartados (maxRetransmits: 0).
+ * Pacotes de 1 render quantum (128 amostras ≈ 2.7ms @48kHz — o mínimo que
+ * o AudioWorklet entrega por vez, não dá pra empacotar menor). Perda de
+ * pacote = ~2.7ms de silêncio, imperceptível numa festa; atraso acumulado
+ * nunca cresce porque pacotes atrasados são simplesmente descartados
+ * (maxRetransmits: 0). Pacotes menores = mais overhead de rede, irrelevante
+ * na LAN, mas reduz a espera de empacotamento no celular (era 8ms c/ 3
+ * chunks; ver CAPTURE_MS no micReceiver da TV).
  */
 export interface TvMicSession {
   stop: () => void;
 }
 
-const CHUNKS_PER_PACKET = 3; // 3 × 128 amostras = 384 = 8ms @48kHz
+const CHUNKS_PER_PACKET = 1; // 128 amostras = ~2.7ms @48kHz (1 render quantum)
 const MAX_BUFFERED_BYTES = 32 * 1024; // descarta se o canal congestionar
 
 const SENDER_WORKLET = `

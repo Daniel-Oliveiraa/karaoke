@@ -33,10 +33,29 @@ export interface MicReceiverManager {
   stop: () => void;
 }
 
-/** Captura no celular: entrada (~8ms) + pacote de 8ms. */
-const CAPTURE_MS = 16;
-/** Alvo do ring buffer na TV. */
-const TARGET_BUFFER_MS = 30;
+/**
+ * Captura no celular: ~1 render quantum de entrada (~3ms) + pacote de
+ * ~2.7ms (1 chunk de 128 amostras — ver tvMic.ts). Reduzido de 16ms
+ * (pacotes de 8ms/3 chunks) — ganho de ~10ms real de latência.
+ */
+const CAPTURE_MS = 6;
+/**
+ * Alvo do ring buffer na TV — a margem de segurança contra jitter de rede.
+ * Motores diferentes, folgas diferentes:
+ * - AudioWorklet roda numa thread de áudio dedicada (timing preciso) —
+ *   aguenta um alvo mais agressivo. Reduzido de 30 para 20ms (ganho de
+ *   10ms); test-tv-mic.py: 0 underruns.
+ * - ScriptProcessor (fallback de contexto inseguro — é o que a TV usa
+ *   quando acessada por http://<IP>, SEM https) roda na thread principal
+ *   e é mais sensível a jank; já tem +~21ms de latência fixa (buffer de
+ *   1024 amostras). Em 20ms o teste mostrou 1 underrun — mantido nos 30ms
+ *   originais por segurança.
+ * Se a voz engasgar/crepitar em Wi-Fi ruim ou com 2 celulares simultâneos,
+ * suba o valor correspondente de volta; test-tv-mic.py não reproduz
+ * jitter de rede real, então a validação de verdade é no ambiente de festa.
+ */
+const WORKLET_BUFFER_MS = 20;
+const SCRIPT_PROCESSOR_BUFFER_MS = 30;
 
 const PLAYER_WORKLET = `
 class PcmPlayer extends AudioWorkletProcessor {
@@ -82,7 +101,7 @@ class PcmPlayer extends AudioWorkletProcessor {
     const out = outputs[0][0];
     if (!out) return true;
 
-    const target = (${TARGET_BUFFER_MS} / 1000) * this.srcRate;
+    const target = (${WORKLET_BUFFER_MS} / 1000) * this.srcRate;
     const ratio = this.srcRate / sampleRate;
 
     if (!this.started) {
@@ -210,7 +229,7 @@ class ScriptProcessorPlayer implements VoicePlayer {
 
   private process(e: AudioProcessingEvent): void {
     const out = e.outputBuffer.getChannelData(0);
-    const target = (TARGET_BUFFER_MS / 1000) * this.srcRate;
+    const target = (SCRIPT_PROCESSOR_BUFFER_MS / 1000) * this.srcRate;
     const ratio = this.srcRate / this.ctx.sampleRate;
 
     if (!this.started) {
@@ -522,7 +541,7 @@ export function createMicReceiver(
       trackSink: null,
       remoteReady: false,
       pendingCandidates: [],
-      lastFillMs: TARGET_BUFFER_MS,
+      lastFillMs: WORKLET_BUFFER_MS, // placeholder até o 1º report real chegar
       packets: 0,
       bytes: 0,
       workletInRms: 0,
