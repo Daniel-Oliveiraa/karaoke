@@ -5,6 +5,7 @@ medidor de latencia com estado conectado.
 
 Requer: api (4001), host (3001) e participant (3002) rodando.
 """
+import os
 import re
 import sys
 import time
@@ -26,7 +27,9 @@ def main():
         )
 
         tv = browser.new_page(viewport={"width": 1280, "height": 720}, ignore_https_errors=True)
-        tv.goto("http://localhost:3001", timeout=90000)
+        # TV_URL=http://<IP>:3001 testa o caminho de contexto INSEGURO
+        # (AudioWorklet indisponivel -> fallback ScriptProcessor)
+        tv.goto(os.environ.get("TV_URL", "http://localhost:3001"), timeout=90000)
         tv.click("text=Abrir uma Jam nesta tela")
         tv.wait_for_url(re.compile(r"/session/\d{4}"), timeout=30000)
         code = tv.url.rstrip("/").split("/")[-1]

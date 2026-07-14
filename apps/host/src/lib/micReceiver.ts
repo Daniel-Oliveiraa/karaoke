@@ -131,11 +131,142 @@ class PcmPlayer extends AudioWorkletProcessor {
 registerProcessor("jamroom-pcm-player", PcmPlayer);
 `;
 
+/** Report periódico (1s) dos motores de playback. */
+interface PlayerReport {
+  fillMs: number;
+  underruns: number;
+  started: boolean;
+  /** RMS emitido ao mixer na média do último segundo. */
+  outRms: number;
+  /** RMS recebido da rede na média do último segundo. */
+  inRms: number;
+}
+
+/** Interface comum dos dois motores de playback de PCM. */
+interface VoicePlayer {
+  postConfig(sampleRate: number): void;
+  postPcm(data: ArrayBuffer): void;
+  disconnect(): void;
+}
+
+/**
+ * Fallback para contextos INSEGUROS (TV acessando http://<IP>): AudioWorklet
+ * só existe em secure context, então a mesma lógica de ring buffer roda na
+ * thread principal via ScriptProcessorNode (deprecated, mas universal).
+ * Custo: +~21ms de latência (buffer de 1024 amostras) e mais sensível a
+ * jank da thread principal.
+ */
+class ScriptProcessorPlayer implements VoicePlayer {
+  private node: ScriptProcessorNode;
+  private srcRate = 48000;
+  private ring = new Float32Array(48000);
+  private writeIdx = 0;
+  private readIdx = 0;
+  private started = false;
+  private underruns = 0;
+  private lastReport = 0;
+  private sumSq = 0;
+  private sumN = 0;
+  private inSumSq = 0;
+  private inN = 0;
+
+  constructor(
+    private ctx: AudioContext,
+    dest: AudioNode,
+    private onReport: (r: PlayerReport) => void
+  ) {
+    this.node = ctx.createScriptProcessor(1024, 1, 1);
+    this.node.onaudioprocess = (e) => this.process(e);
+    this.node.connect(dest);
+  }
+
+  postConfig(sampleRate: number): void {
+    this.srcRate = sampleRate || 48000;
+    this.ring = new Float32Array(this.srcRate);
+    this.writeIdx = 0;
+    this.readIdx = 0;
+    this.started = false;
+  }
+
+  postPcm(data: ArrayBuffer): void {
+    const pcm = new Int16Array(data);
+    for (let i = 0; i < pcm.length; i++) {
+      const v = pcm[i]! / 0x8000;
+      this.ring[this.writeIdx % this.ring.length] = v;
+      this.writeIdx++;
+      this.inSumSq += v * v;
+      this.inN++;
+    }
+  }
+
+  disconnect(): void {
+    this.node.disconnect();
+    this.node.onaudioprocess = null;
+  }
+
+  private fill(): number {
+    return this.writeIdx - Math.floor(this.readIdx);
+  }
+
+  private process(e: AudioProcessingEvent): void {
+    const out = e.outputBuffer.getChannelData(0);
+    const target = (TARGET_BUFFER_MS / 1000) * this.srcRate;
+    const ratio = this.srcRate / this.ctx.sampleRate;
+
+    if (!this.started) {
+      if (this.fill() >= target) this.started = true;
+      else {
+        out.fill(0);
+        this.report();
+        return;
+      }
+    }
+
+    for (let i = 0; i < out.length; i++) {
+      if (this.fill() < 2) {
+        out.fill(0, i);
+        this.started = false;
+        this.underruns++;
+        break;
+      }
+      const idx = Math.floor(this.readIdx);
+      const frac = this.readIdx - idx;
+      const a = this.ring[idx % this.ring.length]!;
+      const b = this.ring[(idx + 1) % this.ring.length]!;
+      out[i] = a + (b - a) * frac;
+      this.sumSq += out[i]! * out[i]!;
+      this.sumN++;
+      this.readIdx += ratio;
+    }
+
+    const maxFill = target * 3;
+    if (this.fill() > maxFill) this.readIdx = this.writeIdx - target;
+    this.report();
+  }
+
+  private report(): void {
+    if (this.ctx.currentTime - this.lastReport <= 1) return;
+    this.lastReport = this.ctx.currentTime;
+    this.onReport({
+      fillMs: (this.fill() / this.srcRate) * 1000,
+      underruns: this.underruns,
+      started: this.started,
+      outRms: this.sumN ? Math.sqrt(this.sumSq / this.sumN) : 0,
+      inRms: this.inN ? Math.sqrt(this.inSumSq / this.inN) : 0,
+    });
+    this.underruns = 0;
+    this.sumSq = 0;
+    this.sumN = 0;
+    this.inSumSq = 0;
+    this.inN = 0;
+  }
+}
+
 /** Estado de uma conexão de voz (um celular). */
 interface Peer {
   pc: RTCPeerConnection;
-  /** Worklet próprio (ring buffer independente por cantor). */
-  player: AudioWorkletNode | null;
+  /** Motor de playback próprio (ring buffer independente por cantor). */
+  player: VoicePlayer | null;
   /** Ganho individual antes do barramento (reduzido quando há 2 vozes). */
   gain: GainNode | null;
   trackSink: HTMLAudioElement | null;
@@ -170,6 +301,7 @@ export function createMicReceiver(
   let analyser: AnalyserNode | null = null;
   let workletReady: Promise<void> | null = null;
   let statsTimer: ReturnType<typeof setInterval> | null = null;
+  let engine: "worklet" | "script-processor" = "worklet";
 
   /** Com 2 vozes somadas, reduz o ganho por peer para evitar clipping. */
   function rebalanceGains() {
@@ -252,11 +384,22 @@ export function createMicReceiver(
       delay.connect(damp).connect(feedback).connect(delay);
       delay.connect(wet).connect(ctx.destination);
 
-      workletReady = ctx.audioWorklet.addModule(
-        URL.createObjectURL(
-          new Blob([PLAYER_WORKLET], { type: "application/javascript" })
-        )
-      );
+      // AudioWorklet só existe em SECURE CONTEXT (https ou localhost).
+      // TV acessando http://<IP> cai no fallback de ScriptProcessor.
+      if (ctx.audioWorklet) {
+        engine = "worklet";
+        workletReady = ctx.audioWorklet.addModule(
+          URL.createObjectURL(
+            new Blob([PLAYER_WORKLET], { type: "application/javascript" })
+          )
+        );
+      } else {
+        engine = "script-processor";
+        workletReady = Promise.resolve();
+        console.warn(
+          "[tvmic] AudioWorklet indisponível (página em contexto inseguro?) — usando fallback ScriptProcessor (+~21ms)"
+        );
+      }
       // avisa a UI já — se nasceu suspenso, o aviso "clique na tela"
       // precisa aparecer antes mesmo de a conexão completar
       void collectStats();
@@ -264,28 +407,41 @@ export function createMicReceiver(
     await workletReady;
   }
 
-  /** Worklet + ganho individual de um cantor, plugados no barramento. */
-  async function createPlayer(peer: Peer): Promise<AudioWorkletNode> {
+  /** Motor de playback + ganho individual do cantor, no barramento. */
+  async function createPlayer(peer: Peer): Promise<VoicePlayer> {
     await ensureAudio();
+    const gain = ctx!.createGain();
+    gain.connect(voiceBus!);
+    peer.gain = gain;
+    rebalanceGains();
+
+    const onReport = (r: PlayerReport) => {
+      peer.lastFillMs = r.fillMs;
+      peer.workletInRms = r.inRms;
+      peer.workletOutRms = r.outRms;
+      peer.workletStarted = r.started;
+      peer.underruns += r.underruns;
+    };
+
+    if (engine === "script-processor") {
+      return new ScriptProcessorPlayer(ctx!, gain, onReport);
+    }
+
     const node = new AudioWorkletNode(ctx!, "jamroom-pcm-player", {
       numberOfInputs: 0,
       numberOfOutputs: 1,
       outputChannelCount: [1],
     });
     node.port.onmessage = (e) => {
-      if (typeof e.data?.fillMs === "number") {
-        peer.lastFillMs = e.data.fillMs;
-        peer.workletInRms = e.data.inRms ?? 0;
-        peer.workletOutRms = e.data.outRms ?? 0;
-        peer.workletStarted = Boolean(e.data.started);
-        peer.underruns += e.data.underruns ?? 0;
-      }
+      if (typeof e.data?.fillMs === "number") onReport(e.data as PlayerReport);
     };
-    const gain = ctx!.createGain();
-    node.connect(gain).connect(voiceBus!);
-    peer.gain = gain;
-    rebalanceGains();
-    return node;
+    node.connect(gain);
+    return {
+      postConfig: (sampleRate) =>
+        node.port.postMessage({ type: "config", sampleRate }),
+      postPcm: (data) => node.port.postMessage(data, [data]),
+      disconnect: () => node.disconnect(),
+    };
   }
 
   async function collectStats() {
@@ -306,6 +462,7 @@ export function createMicReceiver(
     }
     const diag: Record<string, unknown> = {
       ctxState: ctx?.state,
+      engine,
       outputRms: Math.round(outputRms * 10000) / 10000,
     };
     for (const [participantId, peer] of peers) {
@@ -390,12 +547,12 @@ export function createMicReceiver(
         if (typeof msg.data === "string") {
           try {
             const header = JSON.parse(msg.data) as { type: string; sampleRate: number };
-            if (header.type === "config") peer.player?.port.postMessage(header);
+            if (header.type === "config") peer.player?.postConfig(header.sampleRate);
           } catch {}
         } else if (peer.player) {
           peer.packets += 1;
           peer.bytes += (msg.data as ArrayBuffer).byteLength;
-          peer.player.port.postMessage(msg.data, [msg.data as ArrayBuffer]);
+          peer.player.postPcm(msg.data as ArrayBuffer);
         }
       };
     };

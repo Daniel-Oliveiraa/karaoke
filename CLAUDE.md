@@ -271,5 +271,10 @@ Fonte completa: `docs/layoutDesc_extracted.txt`. Tokens em `packages/config/tail
 - Lições de WebRTC/áudio que custaram debugging (não repetir): candidatos ICE precisam de fila
   até a descrição remota aplicar; Android entrega silêncio numa 2ª captura simultânea do mic
   (compartilhar o MediaStream); AudioContext criado sem gesto nasce suspenso (retomar em
-  clique + avisar na UI); assets de dev do Next 16 bloqueiam acesso cross-origin
-  (`allowedDevOrigins`); getUserMedia exige HTTPS fora de localhost.
+  clique + avisar na UI — o aviso precisa aparecer MESMO sem conexão de voz ativa); assets
+  de dev do Next 16 bloqueiam acesso cross-origin (`allowedDevOrigins`); getUserMedia exige
+  HTTPS fora de localhost; **AudioWorklet só existe em secure context** — TV acessando
+  `http://<IP>` cai no fallback ScriptProcessor do micReceiver (+~21ms; `__tvmic.engine`
+  diz qual motor está ativo); sockets reconectados após restart da API perdem role/sala —
+  clients refazem attach/rejoin no evento `reconnect`; testes localhost não cobrem
+  contexto inseguro — usar `TV_URL=http://<IP>:3001 python scripts/test-tv-mic.py`.
