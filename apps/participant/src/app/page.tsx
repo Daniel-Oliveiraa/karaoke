@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { Jam, Participant, Song } from "@jamroom/shared-types";
+import { acceptedSingerIds } from "@jamroom/shared-types";
 import { HubView } from "@/components/HubView";
 import { JamEndedView } from "@/components/JamEndedView";
 import { JoinView } from "@/components/JoinView";
@@ -132,23 +133,24 @@ export default function ParticipantPage() {
     return <JamEndedView jam={jam} me={me} />;
   }
 
-  // é a minha vez de cantar?
+  // é a minha vez de cantar (solo ou como parte do dueto/grupo)?
   if (jam.status === "playing" && jam.currentItemId) {
     const item = jam.queue.find((i) => i.id === jam.currentItemId);
     const song = item ? songsById.get(item.songId) : undefined;
-    if (item?.participantId === me.id && song) {
+    if (item && song && acceptedSingerIds(item).includes(me.id)) {
       return <SingView jam={jam} song={song} me={me} />;
     }
   }
 
   // acabei de cantar?
-  if (jam.status === "results" && jam.lastResult?.participantId === me.id) {
+  const myResult = jam.lastResults.find((r) => r.participantId === me.id);
+  if (jam.status === "results" && myResult) {
     return (
       <MyResultView
         jam={jam}
         me={me}
-        result={jam.lastResult}
-        song={songsById.get(jam.lastResult.songId)}
+        result={myResult}
+        song={songsById.get(myResult.songId)}
       />
     );
   }

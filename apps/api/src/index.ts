@@ -9,17 +9,20 @@ import type {
   ScoreResult,
   ServerToClientEvents,
 } from "@jamroom/shared-types";
+import { acceptedSingerIds } from "@jamroom/shared-types";
 import { FULL_CATALOG, MEDIA_DIR, getSong } from "./catalog";
 import {
   addParticipant,
   addToQueue,
-  applyResult,
+  applyResults,
   createJam,
   currentItem,
   endJam,
   getJam,
+  inviteSinger,
   nextQueued,
   removeFromQueue,
+  respondInvite,
   scheduleSave,
   skipCurrent,
 } from "./store";
@@ -40,6 +43,13 @@ interface SocketData {
 }
 
 const PORT = Number(process.env.PORT ?? 4001);
+/**
+ * Porta HTTP pura, espelho da principal, para clientes que não conseguem
+ * aceitar o certificado self-signed (navegador de TV): a tela host não
+ * usa microfone, então não precisa de contexto seguro. Só sobe quando a
+ * principal está em HTTPS. Desativar com HTTP_PORT=0.
+ */
+const HTTP_PORT = Number(process.env.HTTP_PORT ?? 4000);
 
 /**
  * TLS de desenvolvimento: getUserMedia (microfone) só existe em contexto
@@ -155,18 +165,31 @@ function broadcastState(code: string): void {
   }
 }
 
-/** Aplica o resultado da música atual e volta a Jam para o estado de fila. */
-function finishCurrentSong(code: string, result: ScoreResult): void {
+/** Aplica os resultados da música atual e volta a Jam para o estado de fila. */
+function finishCurrentSong(code: string, results: ScoreResult[]): void {
   const record = getJam(code);
   if (!record) return;
   if (record.resultTimeout) {
     clearTimeout(record.resultTimeout);
     record.resultTimeout = null;
   }
-  applyResult(record.jam, result);
+  record.pendingScores = null;
+  applyResults(record.jam, results);
   record.jam.status = "results";
   record.jam.songStartedAt = null;
   broadcastState(code);
+}
+
+/** Finaliza a música se todos os cantores aceitos já enviaram score. */
+function maybeFinishCurrentSong(code: string): void {
+  const record = getJam(code);
+  if (!record || record.jam.status !== "playing" || !record.pendingScores) return;
+  const item = currentItem(record.jam);
+  if (!item) return;
+  const singerIds = acceptedSingerIds(item);
+  if (singerIds.every((id) => record.pendingScores!.has(id))) {
+    finishCurrentSong(code, [...record.pendingScores.values()]);
+  }
 }
 
 io.on("connection", (socket: JamSocket) => {
@@ -202,11 +225,16 @@ io.on("connection", (socket: JamSocket) => {
     if (!record || record.jam.status === "playing" || record.jam.status === "ended") return;
     const item = nextQueued(record.jam);
     if (!item || !getSong(item.songId)) return;
+    // convites pendentes expiram: a música começa com quem aceitou
+    for (const singer of item.singers) {
+      if (singer.status === "invited") singer.status = "declined";
+    }
     item.status = "playing";
     record.jam.status = "playing";
     record.jam.currentItemId = item.id;
     record.jam.songStartedAt = Date.now();
-    record.jam.lastResult = null;
+    record.jam.lastResults = [];
+    record.pendingScores = new Map();
     broadcastState(code);
   });
 
@@ -228,19 +256,25 @@ io.on("connection", (socket: JamSocket) => {
     if (!record || record.jam.status !== "playing") return;
     const item = currentItem(record.jam);
     if (!item) return;
-    // Espera o score do cantor; se não vier (celular travou/saiu), fecha
-    // a música com score zero para a Jam nunca ficar presa.
+    // Espera o score de cada cantor; quem não enviar até o fallback
+    // (celular travou/saiu) fecha com zero para a Jam nunca ficar presa.
     record.resultTimeout = setTimeout(() => {
       const song = getSong(item.songId);
-      finishCurrentSong(code, {
-        queueItemId: item.id,
-        songId: item.songId,
-        participantId: item.participantId,
-        score: 0,
-        accuracy: 0,
-        notesHit: 0,
-        notesTotal: song?.notes.length ?? 0,
-      });
+      const pending = record.pendingScores ?? new Map<string, ScoreResult>();
+      for (const singerId of acceptedSingerIds(item)) {
+        if (!pending.has(singerId)) {
+          pending.set(singerId, {
+            queueItemId: item.id,
+            songId: item.songId,
+            participantId: singerId,
+            score: 0,
+            accuracy: 0,
+            notesHit: 0,
+            notesTotal: song?.notes.length ?? 0,
+          });
+        }
+      }
+      finishCurrentSong(code, [...pending.values()]);
     }, RESULT_FALLBACK_MS);
   });
 
@@ -263,6 +297,7 @@ io.on("connection", (socket: JamSocket) => {
       clearTimeout(record.resultTimeout);
       record.resultTimeout = null;
     }
+    record.pendingScores = null;
     if (skipCurrent(record.jam)) broadcastState(code);
   });
 
@@ -333,12 +368,46 @@ io.on("connection", (socket: JamSocket) => {
     const record = getJam(code);
     if (!record) return;
     const item = currentItem(record.jam);
-    if (!item || item.participantId !== participantId) return; // só o cantor da vez
-    if (record.resultTimeout) {
-      clearTimeout(record.resultTimeout);
-      record.resultTimeout = null;
+    if (!item) return;
+    const singer = item.singers.find(
+      (s) => s.participantId === participantId && s.status === "accepted"
+    );
+    if (!singer) return; // só quem está cantando pode sair
+    singer.status = "declined";
+    record.pendingScores?.delete(participantId);
+    if (acceptedSingerIds(item).length === 0) {
+      // último cantor desistiu: a música é pulada (caso solo original)
+      if (record.resultTimeout) {
+        clearTimeout(record.resultTimeout);
+        record.resultTimeout = null;
+      }
+      record.pendingScores = null;
+      if (skipCurrent(record.jam)) broadcastState(code);
+      return;
     }
-    if (skipCurrent(record.jam)) broadcastState(code);
+    // os demais continuam; quem ficou pode até já ter enviado score
+    maybeFinishCurrentSong(code);
+    broadcastState(code);
+  });
+
+  socket.on("participant:invite", ({ queueItemId, inviteeId }) => {
+    const { code, participantId } = socket.data;
+    if (socket.data.role !== "participant" || !code || !participantId) return;
+    const record = getJam(code);
+    if (!record || record.jam.status === "ended") return;
+    if (inviteSinger(record.jam, queueItemId, participantId, inviteeId)) {
+      broadcastState(code);
+    }
+  });
+
+  socket.on("participant:invite_response", ({ queueItemId, accept }) => {
+    const { code, participantId } = socket.data;
+    if (socket.data.role !== "participant" || !code || !participantId) return;
+    const record = getJam(code);
+    if (!record || record.jam.status === "ended") return;
+    if (respondInvite(record.jam, queueItemId, participantId, accept)) {
+      broadcastState(code);
+    }
   });
 
   socket.on("participant:pitch", (sample) => {
@@ -347,7 +416,7 @@ io.on("connection", (socket: JamSocket) => {
     const record = getJam(code);
     if (!record || record.jam.status !== "playing") return;
     const item = currentItem(record.jam);
-    if (!item || item.participantId !== participantId) return; // só o cantor da vez
+    if (!item || !acceptedSingerIds(item).includes(participantId)) return; // só quem canta
     socket.to(code).emit("jam:pitch", { ...sample, participantId });
   });
 
@@ -357,8 +426,10 @@ io.on("connection", (socket: JamSocket) => {
     const record = getJam(code);
     if (!record || record.jam.status !== "playing") return;
     const item = currentItem(record.jam);
-    if (!item || item.participantId !== participantId) return;
-    finishCurrentSong(code, {
+    if (!item || !acceptedSingerIds(item).includes(participantId)) return;
+    if (!record.pendingScores) record.pendingScores = new Map();
+    if (record.pendingScores.has(participantId)) return; // duplicata
+    record.pendingScores.set(participantId, {
       queueItemId: item.id,
       songId: item.songId,
       participantId,
@@ -367,6 +438,7 @@ io.on("connection", (socket: JamSocket) => {
       notesHit: result.notesHit,
       notesTotal: result.notesTotal,
     });
+    maybeFinishCurrentSong(code);
   });
 
   // ------------------------------------------- "voz na TV" (relay WebRTC)
@@ -376,7 +448,7 @@ io.on("connection", (socket: JamSocket) => {
     const record = getJam(code);
     if (!record || record.jam.status !== "playing") return;
     const item = currentItem(record.jam);
-    if (!item || item.participantId !== participantId) return; // só o cantor da vez
+    if (!item || !acceptedSingerIds(item).includes(participantId)) return; // só quem canta
     socket.to(code).emit("jam:mic_signal", { participantId, data });
   });
 
@@ -403,3 +475,13 @@ httpServer.listen(PORT, () => {
   const proto = tls ? "https" : "http";
   console.log(`[jamroom-api] ouvindo em ${proto}://localhost:${PORT}`);
 });
+
+if (tls && HTTP_PORT > 0) {
+  const plainServer = createServer(requestHandler);
+  io.attach(plainServer);
+  plainServer.listen(HTTP_PORT, () => {
+    console.log(
+      `[jamroom-api] espelho HTTP (TV sem suporte a cert self-signed) em http://localhost:${HTTP_PORT}`
+    );
+  });
+}

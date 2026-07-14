@@ -68,6 +68,11 @@ openssl req -x509 -newkey rsa:2048 -nodes -keyout certs/dev.key -out certs/dev.c
 ```
 **Em rede local** (celulares de verdade): exportar `NEXT_PUBLIC_PARTICIPANT_URL=https://<IP>:3002`
 para o host (QR aponta para lá) e `NEXT_PUBLIC_API_URL=https://<IP>:4001` para host e participant.
+**TV que não aceita certificado self-signed** (2026-07-13): a API sobe também um espelho
+HTTP puro na **porta 4000** (mesmo Socket.io/handlers; só quando a principal está em HTTPS;
+desativar com `HTTP_PORT=0`). Nesse caso, rodar o host com
+`NEXT_PUBLIC_API_URL=http://<IP>:4000` — a TV não usa microfone, então não precisa de
+contexto seguro; os celulares continuam no HTTPS 4001.
 No celular, aceitar o aviso de certificado 2x (uma vez em `https://<IP>:4001/health`, outra na
 página do participant); no PC, aceitar 1x para o host falar com a API. Também: `allowedDevOrigins`
 com o IP nos `next.config.ts` (Next 16 bloqueia assets de dev cross-origin) e regra de firewall
@@ -83,7 +88,8 @@ python scripts/test-real-song.py           # música real: áudio na TV + letra 
 python scripts/test-tv-mic.py              # voz na TV: conexão, pacotes PCM fluindo, som tocando
 python scripts/test-session-persistence.py # sessão do celular sobrevive a fechar o navegador
 ```
-Última execução completa: 2026-07-12, tudo verde. Score real validado (perfeito=1000, oitava
+Última execução completa: 2026-07-12, tudo verde; em 2026-07-13, test-protocol (com os 19
+asserts de dueto) e test-jam-flow re-executados verdes. Score real validado (perfeito=1000, oitava
 acima=1000, desafinado 3 semitons=242, mudo=0); voz na TV validada em hardware real pelo usuário.
 
 ### Músicas reais (pipeline de ingestão)
@@ -101,10 +107,18 @@ instrumental de outra fonte). `batch_ultrastar_cc.py` importa o repositório ofi
 UltraStar-Deluxe/songs (39 pacotes CC). `batch_local.py [--strip-vocals]` importa pacotes
 locais de `input/ultrastar/` (uma pasta por música: .txt + áudio) — fluxo do usuário para
 estudo pessoal em casa; itens entram marcados como não licenciados para uso comercial.
-**Catálogo atual: 58 músicas (53 com áudio real)** — 14 Josh Woodward (CC BY 4.0, via
+**`batch_youtube.py <URL|ytsearchN:termos> [--language xx] [--limit N]`** (2026-07-13):
+baixa playlist/vídeo com yt-dlp (MP3 cacheado em `input/youtube/`, ffmpeg do PATH ou do
+pacote `imageio-ffmpeg`) e roda o pipeline IA em cada faixa; título/artista vêm dos
+metadados do vídeo. Mesmo enquadramento do `batch_local.py`: só estudo pessoal (viola ToS
+do YouTube), attribution registra origem e ausência de licença — jamais entra no produto.
+**Catálogo atual: 68+ músicas e crescendo** — 14 Josh Woodward (CC BY 4.0, via
 pipeline Demucs+pyin+Whisper) + 39 UltraStar CC (Jonathan Coulton etc. — **vários são
 CC BY-NC, não comercial**: revisar license.txt de cada pacote antes de qualquer lançamento)
-+ 5 cantigas demo synth. Dependências Python:
++ 5 cantigas demo synth + itens pessoais via `batch_youtube.py` (em 2026-07-13 há um lote
+de 373 músicas de playlist do usuário em processamento contínuo, ~13/h — **não licenciadas,
+uso pessoal**; retomar com o mesmo comando se interromper, progresso em
+`input/youtube/processed.txt`). Dependências Python:
 `pip install -r services/audio-processing/requirements.txt` (torch CPU já instalado).
 **Só processar áudio licenciado** — música comercial popular exige catálogo B2B + ECAD
 (Seção 1 do plano); bancos UltraStar comunitários de hits comerciais são transcrições sem
@@ -116,8 +130,22 @@ licença e NÃO devem ser importados em massa no produto.
   a restart da API (música tocando volta para a fila no boot; jams >24h descartadas). Sessão do
   participante persiste em localStorage no celular + rejoin. Migrar para Redis/Postgres sem
   mudar o protocolo de `@jamroom/shared-types`. Testes: `scripts/test-persistence.mjs`.
-- **Pular/cancelar**: `host:skip_song` (botão na TV), `participant:skip_song` (cantor desiste)
-  e `participant:remove_song` (✕ nos itens próprios da fila) — pular não pontua.
+- **Pular/cancelar**: `host:skip_song` (botão na TV), `participant:skip_song` (cantor sai da
+  música — num grupo os demais continuam; se ninguém sobrar, pula) e
+  `participant:remove_song` (✕ nos itens próprios da fila) — pular não pontua.
+- **Duetos/grupos (2026-07-13)**: ao adicionar música, o dono pode convidar outros
+  participantes ("+ dueto" na fila → sheet de convite); convidado recebe banner
+  Aceitar/Recusar (`participant:invite` / `participant:invite_response`); convites pendentes
+  expiram quando a música começa. `QueueItem.singers: QueueSinger[]` (dono = `participantId`,
+  entra aceito; helper `acceptedSingerIds`); máx `MAX_SINGERS_PER_ITEM = 4`. Cada celular
+  captura o próprio áudio e envia score individual; servidor coleta em `pendingScores` e
+  fecha quando todos enviam (fallback 8s preenche zeros de quem sumiu).
+  `Jam.lastResults: ScoreResult[]` (ordenado por score desc) substituiu `lastResult` —
+  snapshot antigo é migrado no load. TV: um PitchMeter por cantor, resultado lado a lado
+  com badge "melhor da música". "Voz na TV" aceita até `MAX_TV_MICS = 2` celulares
+  simultâneos (peers/worklets separados somados no voiceBus com ganho 0.7; o 3º é ignorado).
+  Limitações físicas documentadas: crosstalk entre celulares no mesmo ambiente (detector é
+  monofônico), feedback com 2 mics abertos e "voz dobrada" por latências diferentes.
 - **Catálogo híbrido**: 5 cantigas demo (grade MIDI hardcoded em `apps/api/src/catalog.ts`,
   playback sintetizado) + músicas reais processadas pelo pipeline em `apps/api/media/*.json`
   (playback de instrumental MP3 real). O mesmo formato `Song` cobre os dois casos — a
@@ -186,7 +214,11 @@ Fonte completa: `docs/layoutDesc_extracted.txt`. Tokens em `packages/config/tail
   microfone e rede reais.** Pendente: calibração fina em ambiente ruidoso (festa) e feature
   flag score simulado/real por sessão.
 - **Extra (fora do plano original)**: "voz na TV" — celular como microfone via WebRTC/PCM,
-  latência validada em hardware real pelo usuário.
+  latência validada em hardware real pelo usuário. **Duetos/grupos (2026-07-13)**: convite
+  com aceite, até 4 cantores por música com score individual (cada celular captura a própria
+  voz), voz na TV mixada para até 2 aparelhos — protocolo testado
+  (`scripts/test-protocol.mjs`, 19 asserts novos); pendente validação manual com 2 celulares
+  reais.
 - **Fase 3 — Monetização**: **adiada a pedido do usuário**.
 - **Fase 4 — Locação de equipamentos**: fora do escopo.
 

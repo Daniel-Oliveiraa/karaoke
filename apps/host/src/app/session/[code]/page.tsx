@@ -30,10 +30,11 @@ export default function SessionPage({
   const [songs, setSongs] = useState<Song[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [time, setTime] = useState(0);
-  const [pitch, setPitch] = useState<LivePitch | null>(null);
+  // pitch/mic por cantor: duetos têm um medidor e uma conexão por celular
+  const [pitches, setPitches] = useState<Map<string, LivePitch>>(new Map());
   const [countdown, setCountdown] = useState<number | null>(null);
   const [secondsToNext, setSecondsToNext] = useState<number | null>(null);
-  const [micStats, setMicStats] = useState<MicStats | null>(null);
+  const [micStats, setMicStats] = useState<Map<string, MicStats>>(new Map());
 
   const playbackRef = useRef<SynthPlayback | null>(null);
   const endedSentRef = useRef(false);
@@ -53,7 +54,8 @@ export default function SessionPage({
     socket.emit("catalog:get", setSongs);
 
     const onState = (j: Jam) => setJam(j);
-    const onPitch = (p: LivePitch) => setPitch(p);
+    const onPitch = (p: LivePitch) =>
+      setPitches((prev) => new Map(prev).set(p.participantId, p));
     socket.on("jam:state", onState);
     socket.on("jam:pitch", onPitch);
     socket.on("jam:ended", onState);
@@ -76,7 +78,7 @@ export default function SessionPage({
     if (!song) return;
 
     endedSentRef.current = false;
-    setPitch(null);
+    setPitches(new Map());
     setTime(0);
     const playback = playSong(song, API_URL, () =>
       getSocket().emit("host:playback_started")
@@ -183,7 +185,7 @@ export default function SessionPage({
           jam={jam}
           song={song}
           time={time}
-          pitch={pitch}
+          pitches={pitches}
           songsById={songsById}
           micStats={micStats}
           onSkip={() => getSocket().emit("host:skip_song")}
@@ -192,7 +194,7 @@ export default function SessionPage({
     }
   }
 
-  if (jam.status === "results" && jam.lastResult) {
+  if (jam.status === "results" && jam.lastResults.length > 0) {
     return <ResultsView jam={jam} songsById={songsById} secondsToNext={secondsToNext} />;
   }
 

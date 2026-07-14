@@ -37,9 +37,15 @@ export function LobbyView({
   const queued = jam.queue.filter((i) => i.status === "queued");
   const next = queued[0];
   const nextSong = next ? songsById.get(next.songId) : undefined;
-  const nextSinger = next
-    ? jam.participants.find((p) => p.id === next.participantId)
-    : undefined;
+
+  /** Nomes de quem canta o item ("Ana & Bia"), sem os que recusaram. */
+  const singerNames = (item: (typeof queued)[number]) =>
+    item.singers
+      .filter((s) => s.status !== "declined")
+      .map(
+        (s) => jam.participants.find((p) => p.id === s.participantId)?.name ?? "?"
+      )
+      .join(" & ");
 
   return (
     <main className="grid h-full grid-cols-[1.2fr_1fr] gap-12 p-16">
@@ -70,12 +76,12 @@ export function LobbyView({
           </div>
         </div>
 
-        {countdown !== null && nextSong && nextSinger ? (
+        {countdown !== null && nextSong && next ? (
           <div className="rounded-lg border border-primary/40 bg-primary/10 px-8 py-6">
             <p className="text-body text-foreground-muted">A seguir</p>
             <p className="mt-1 text-title font-bold">
               {nextSong.title}
-              <span className="font-medium text-foreground-muted"> · {nextSinger.name}</span>
+              <span className="font-medium text-foreground-muted"> · {singerNames(next)}</span>
             </p>
             <p className="mt-2 text-subtitle font-semibold text-primary">
               Começando em {countdown}...
@@ -124,7 +130,6 @@ export function LobbyView({
             <div className="flex flex-col gap-2">
               {queued.slice(0, 4).map((item, i) => {
                 const song = songsById.get(item.songId);
-                const singer = jam.participants.find((p) => p.id === item.participantId);
                 return (
                   <div
                     key={item.id}
@@ -134,7 +139,7 @@ export function LobbyView({
                     <span className="flex-1 truncate text-subtitle font-semibold">
                       {song?.title ?? "?"}
                     </span>
-                    <span className="text-body text-foreground-muted">{singer?.name}</span>
+                    <span className="text-body text-foreground-muted">{singerNames(item)}</span>
                   </div>
                 );
               })}

@@ -1,7 +1,8 @@
 /**
  * Teste ponta a ponta do protocolo da Jam (sem navegador):
  * host cria a Jam → participante entra → adiciona música → host inicia →
- * participante manda pitch + score → leaderboard atualiza → host encerra.
+ * participante manda pitch + score → leaderboard atualiza → duetos
+ * (convite/aceite/recusa/expiração/fallback/desistência) → host encerra.
  *
  * Uso: node scripts/test-protocol.mjs  (API precisa estar de pé na :4001)
  */
@@ -27,7 +28,7 @@ function expect(cond, msg) {
 const host = connect();
 const part = connect();
 
-const timeout = setTimeout(() => fail("timeout geral (15s)"), 15000);
+const timeout = setTimeout(() => fail("timeout geral (45s)"), 45000);
 
 const hostStates = [];
 host.on("jam:state", (j) => hostStates.push(j));
@@ -72,7 +73,7 @@ part.emit("participant:score", { score: 843, accuracy: 0.843, notesHit: 40, note
 await new Promise((r) => setTimeout(r, 300));
 state = hostStates.at(-1);
 expect(state?.status === "results", "Jam em resultados");
-expect(state?.lastResult?.score === 843, "score aplicado no resultado");
+expect(state?.lastResults?.[0]?.score === 843, "score aplicado no resultado");
 expect(
   state?.participants[0]?.totalScore === 843,
   "leaderboard atualizado com 843 pts"
@@ -94,7 +95,7 @@ host.emit("host:song_ended");
 await new Promise((r) => setTimeout(r, 8500));
 state = hostStates.at(-1);
 expect(
-  state?.status === "results" && state.lastResult?.score === 0,
+  state?.status === "results" && state.lastResults?.[0]?.score === 0,
   "fallback fechou a música com score 0 quando o cantor sumiu"
 );
 host.emit("host:continue");
@@ -121,7 +122,7 @@ host.emit("host:skip_song");
 await new Promise((r) => setTimeout(r, 150));
 state = hostStates.at(-1);
 expect(
-  state.status === "lobby" && state.currentItemId === null && state.lastResult === null,
+  state.status === "lobby" && state.currentItemId === null && state.lastResults.length === 0,
   "host pulou a música (sem resultado, direto para o lobby)"
 );
 expect(
@@ -139,7 +140,188 @@ await new Promise((r) => setTimeout(r, 150));
 state = hostStates.at(-1);
 expect(state.status === "lobby", "cantor desistiu e a Jam voltou ao lobby");
 
-// 13. host encerra
+// ---------------------------------------------------------------- duetos
+const wait = (ms = 200) => new Promise((r) => setTimeout(r, ms));
+const last = () => hostStates.at(-1);
+const scoreOf = (state2, id) =>
+  state2.participants.find((p) => p.id === id)?.totalScore;
+
+const part2 = connect();
+const joined2 = await new Promise((res) =>
+  part2.emit("participant:join", { code, name: "Duetinho" }, res)
+);
+expect(joined2.ok, "segundo participante entrou na Jam");
+const p1 = joined.participant.id;
+const p2 = joined2.participant.id;
+const p1ScoreBefore = scoreOf(joined2.jam, p1);
+
+// 13. convite + aceite → dueto completo com dois scores
+part.emit("participant:add_song", song.id);
+await wait();
+let item = last().queue.find((i) => i.status === "queued");
+expect(item.singers.length === 1 && item.singers[0].status === "accepted",
+  "dono entra como cantor aceito");
+
+part2.emit("participant:invite", { queueItemId: item.id, inviteeId: p1 }); // não-dono
+await wait();
+item = last().queue.find((i) => i.id === item.id);
+expect(item.singers.length === 1, "não-dono não consegue convidar");
+
+part.emit("participant:invite", { queueItemId: item.id, inviteeId: p2 });
+await wait();
+item = last().queue.find((i) => i.id === item.id);
+expect(
+  item.singers.some((s) => s.participantId === p2 && s.status === "invited"),
+  "convite registrado como pendente"
+);
+
+part2.emit("participant:invite_response", { queueItemId: item.id, accept: true });
+await wait();
+item = last().queue.find((i) => i.id === item.id);
+expect(
+  item.singers.some((s) => s.participantId === p2 && s.status === "accepted"),
+  "convidado aceitou o dueto"
+);
+
+host.emit("host:start_song");
+await wait();
+expect(last().status === "playing", "dueto tocando");
+
+const pitch2Promise = new Promise((res) => host.once("jam:pitch", res));
+part2.emit("participant:pitch", { t: 2, midi: 60, clarity: 0.8, centsOff: 0.1, hit: true });
+const pitch2 = await pitch2Promise;
+expect(pitch2.participantId === p2, "pitch do convidado chega ao host");
+
+host.emit("host:song_ended");
+part.emit("participant:score", { score: 850, accuracy: 0.85, notesHit: 41, notesTotal: 48 });
+await wait(300);
+expect(last().status === "playing", "1º score não encerra o dueto");
+part2.emit("participant:score", { score: 700, accuracy: 0.7, notesHit: 34, notesTotal: 48 });
+await wait(300);
+state = last();
+expect(
+  state.status === "results" && state.lastResults.length === 2,
+  "2º score encerra: resultado com os dois cantores"
+);
+expect(
+  state.lastResults[0].score === 850 && state.lastResults[1].score === 700,
+  "resultados ordenados por score"
+);
+expect(
+  scoreOf(state, p1) === p1ScoreBefore + 850 && scoreOf(state, p2) === 700,
+  "totalScore individual dos dois atualizado"
+);
+host.emit("host:continue");
+await wait();
+
+// 14. recusa: convidado nega e a música sai solo
+part.emit("participant:add_song", song.id);
+await wait();
+item = last().queue.find((i) => i.status === "queued");
+part.emit("participant:invite", { queueItemId: item.id, inviteeId: p2 });
+await wait();
+part2.emit("participant:invite_response", { queueItemId: item.id, accept: false });
+await wait();
+item = last().queue.find((i) => i.id === item.id);
+expect(
+  item.singers.some((s) => s.participantId === p2 && s.status === "declined"),
+  "recusa registrada"
+);
+part.emit("participant:remove_song", item.id);
+await wait();
+
+// 15. expiração: convite pendente morre quando a música começa
+part.emit("participant:add_song", song.id);
+await wait();
+item = last().queue.find((i) => i.status === "queued");
+part.emit("participant:invite", { queueItemId: item.id, inviteeId: p2 });
+await wait();
+host.emit("host:start_song");
+await wait();
+item = last().queue.find((i) => i.id === item.id);
+expect(
+  item.singers.find((s) => s.participantId === p2)?.status === "declined",
+  "convite pendente expirou no início da música"
+);
+part2.emit("participant:score", { score: 999, accuracy: 0.9, notesHit: 1, notesTotal: 1 });
+await wait(300);
+expect(last().status === "playing", "quem não aceitou não pontua");
+host.emit("host:song_ended");
+part.emit("participant:score", { score: 100, accuracy: 0.1, notesHit: 5, notesTotal: 48 });
+await wait(300);
+expect(
+  last().status === "results" && last().lastResults.length === 1,
+  "música expirada fechou solo"
+);
+host.emit("host:continue");
+await wait();
+
+// 16. fallback parcial: um cantor some, o outro fecha com o próprio score
+part.emit("participant:add_song", song.id);
+await wait();
+item = last().queue.find((i) => i.status === "queued");
+part.emit("participant:invite", { queueItemId: item.id, inviteeId: p2 });
+await wait();
+part2.emit("participant:invite_response", { queueItemId: item.id, accept: true });
+await wait();
+host.emit("host:start_song");
+await wait();
+host.emit("host:song_ended");
+part.emit("participant:score", { score: 500, accuracy: 0.5, notesHit: 24, notesTotal: 48 });
+await wait(8500);
+state = last();
+expect(
+  state.status === "results" &&
+    state.lastResults.length === 2 &&
+    state.lastResults.find((r) => r.participantId === p2)?.score === 0,
+  "fallback fechou o cantor sumido com 0 e manteve o score do outro"
+);
+host.emit("host:continue");
+await wait();
+
+// 17. membro desiste no meio: a música segue para quem ficou
+part.emit("participant:add_song", song.id);
+await wait();
+item = last().queue.find((i) => i.status === "queued");
+part.emit("participant:invite", { queueItemId: item.id, inviteeId: p2 });
+await wait();
+part2.emit("participant:invite_response", { queueItemId: item.id, accept: true });
+await wait();
+host.emit("host:start_song");
+await wait();
+part2.emit("participant:skip_song");
+await wait();
+expect(last().status === "playing", "desistência de um membro não pula a música");
+host.emit("host:song_ended");
+part.emit("participant:score", { score: 600, accuracy: 0.6, notesHit: 29, notesTotal: 48 });
+await wait(300);
+state = last();
+expect(
+  state.status === "results" && state.lastResults.length === 1,
+  "resultado só de quem ficou até o fim"
+);
+host.emit("host:continue");
+await wait();
+
+// 18. todos desistem: música pulada sem resultado
+part.emit("participant:add_song", song.id);
+await wait();
+item = last().queue.find((i) => i.status === "queued");
+part.emit("participant:invite", { queueItemId: item.id, inviteeId: p2 });
+await wait();
+part2.emit("participant:invite_response", { queueItemId: item.id, accept: true });
+await wait();
+host.emit("host:start_song");
+await wait();
+part2.emit("participant:skip_song");
+part.emit("participant:skip_song");
+await wait();
+expect(
+  last().status === "lobby" && last().lastResults.length === 0,
+  "todos desistiram: música pulada sem resultado"
+);
+
+// 19. host encerra
 const endedPromise = new Promise((res) => part.once("jam:ended", res));
 host.emit("host:end_jam");
 const ended = await endedPromise;

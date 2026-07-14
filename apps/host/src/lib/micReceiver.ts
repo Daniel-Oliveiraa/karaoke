@@ -1,12 +1,17 @@
 "use client";
 
 import type { MicSignalData } from "@jamroom/shared-types";
+import { MAX_TV_MICS } from "@jamroom/shared-types";
 import { getSocket } from "./socket";
 
 /**
  * Receptor da "voz na TV" v2: recebe PCM cru (Int16) por RTCDataChannel
  * e toca via AudioWorklet com ring buffer próprio (~30ms) — em vez do
  * jitter buffer do WebRTC, que tem piso de ~40–80ms.
+ *
+ * Duetos: até MAX_TV_MICS celulares simultâneos, um peer/worklet por
+ * cantor, mixados por soma no barramento de voz (com ganho reduzido por
+ * peer para não clipar). O 3º celular que ofertar é ignorado.
  *
  * O worklet de playback faz resampling linear (taxa do celular → taxa da
  * TV) e reporta o nível real do buffer, então o medidor mostra números
@@ -113,144 +118,201 @@ class PcmPlayer extends AudioWorkletProcessor {
 registerProcessor("jamroom-pcm-player", PcmPlayer);
 `;
 
-export function createMicReceiver(
-  onStats: (stats: MicStats | null) => void
-): MicReceiverManager {
-  const socket = getSocket();
-
-  let pc: RTCPeerConnection | null = null;
-  let ctx: AudioContext | null = null;
-  let player: AudioWorkletNode | null = null;
-  let voiceBus: GainNode | null = null;
-  let trackSink: HTMLAudioElement | null = null;
-  let statsTimer: ReturnType<typeof setInterval> | null = null;
-  let currentSinger: string | null = null;
-  let lastFillMs = TARGET_BUFFER_MS;
-  let packets = 0;
-  let bytes = 0;
+/** Estado de uma conexão de voz (um celular). */
+interface Peer {
+  pc: RTCPeerConnection;
+  /** Worklet próprio (ring buffer independente por cantor). */
+  player: AudioWorkletNode | null;
+  /** Ganho individual antes do barramento (reduzido quando há 2 vozes). */
+  gain: GainNode | null;
+  trackSink: HTMLAudioElement | null;
+  remoteReady: boolean;
   // candidatos ICE chegam milissegundos após a oferta, antes de
   // setRemoteDescription terminar — enfileirar até lá (senão:
   // "The remote description was null")
-  let remoteReady = false;
-  let pendingCandidates: RTCIceCandidateInit[] = [];
+  pendingCandidates: RTCIceCandidateInit[];
+  lastFillMs: number;
+  packets: number;
+  bytes: number;
+}
 
-  function teardownPeer() {
-    if (statsTimer) clearInterval(statsTimer);
-    statsTimer = null;
-    pc?.close();
-    pc = null;
-    player = null;
-    voiceBus = null;
-    trackSink?.remove();
-    trackSink = null;
-    void ctx?.close();
-    ctx = null;
-    currentSinger = null;
-    lastFillMs = TARGET_BUFFER_MS;
-    packets = 0;
-    bytes = 0;
-    remoteReady = false;
-    pendingCandidates = [];
-    onStats(null);
+export function createMicReceiver(
+  onStats: (stats: Map<string, MicStats>) => void
+): MicReceiverManager {
+  const socket = getSocket();
+
+  const peers = new Map<string, Peer>();
+  let ctx: AudioContext | null = null;
+  let voiceBus: GainNode | null = null;
+  let workletReady: Promise<void> | null = null;
+  let statsTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Com 2 vozes somadas, reduz o ganho por peer para evitar clipping. */
+  function rebalanceGains() {
+    const perPeer = peers.size > 1 ? 0.7 : 1;
+    for (const peer of peers.values()) {
+      if (peer.gain) peer.gain.gain.value = perPeer;
+    }
   }
 
-  async function setupAudio(): Promise<AudioWorkletNode> {
-    ctx = new AudioContext({ latencyHint: "interactive" });
-    // Política de autoplay: se a página da TV foi carregada sem nenhum
-    // clique, o contexto nasce suspenso (mudo). Tenta retomar já, e de
-    // novo a cada gesto até conseguir; o estado vai no MicStats para a
-    // UI avisar.
-    if (ctx.state === "suspended") {
-      void ctx.resume();
-      const resume = () => {
-        if (ctx?.state === "suspended") void ctx.resume();
-      };
-      document.addEventListener("click", resume);
-      document.addEventListener("keydown", resume);
+  function teardownPeer(participantId: string) {
+    const peer = peers.get(participantId);
+    if (!peer) return;
+    peers.delete(participantId);
+    peer.pc.close();
+    peer.player?.disconnect();
+    peer.gain?.disconnect();
+    peer.trackSink?.remove();
+    rebalanceGains();
+    if (peers.size === 0 && statsTimer) {
+      clearInterval(statsTimer);
+      statsTimer = null;
     }
-    await ctx.audioWorklet.addModule(
-      URL.createObjectURL(new Blob([PLAYER_WORKLET], { type: "application/javascript" }))
-    );
-    const node = new AudioWorkletNode(ctx, "jamroom-pcm-player", {
+    void collectStats();
+  }
+
+  function teardownAll() {
+    for (const id of [...peers.keys()]) teardownPeer(id);
+    void ctx?.close();
+    ctx = null;
+    voiceBus = null;
+    workletReady = null;
+    onStats(new Map());
+  }
+
+  /** Contexto + barramento de voz (dry + reverb) compartilhados, 1x. */
+  async function ensureAudio(): Promise<void> {
+    if (!ctx) {
+      ctx = new AudioContext({ latencyHint: "interactive" });
+      // Política de autoplay: se a página da TV foi carregada sem nenhum
+      // clique, o contexto nasce suspenso (mudo). Tenta retomar já, e de
+      // novo a cada gesto até conseguir; o estado vai no MicStats para a
+      // UI avisar.
+      if (ctx.state === "suspended") {
+        void ctx.resume();
+        const resume = () => {
+          if (ctx?.state === "suspended") void ctx.resume();
+        };
+        document.addEventListener("click", resume);
+        document.addEventListener("keydown", resume);
+      }
+
+      voiceBus = ctx.createGain();
+      voiceBus.gain.value = 1;
+
+      // voz direta
+      const dry = ctx.createGain();
+      dry.gain.value = 0.85;
+      voiceBus.connect(dry).connect(ctx.destination);
+
+      // reverb curto (delay com feedback filtrado) — mascara a latência
+      const delay = ctx.createDelay(0.5);
+      delay.delayTime.value = 0.09;
+      const feedback = ctx.createGain();
+      feedback.gain.value = 0.32;
+      const damp = ctx.createBiquadFilter();
+      damp.type = "lowpass";
+      damp.frequency.value = 3200;
+      const wet = ctx.createGain();
+      wet.gain.value = 0.3;
+      voiceBus.connect(delay);
+      delay.connect(damp).connect(feedback).connect(delay);
+      delay.connect(wet).connect(ctx.destination);
+
+      workletReady = ctx.audioWorklet.addModule(
+        URL.createObjectURL(
+          new Blob([PLAYER_WORKLET], { type: "application/javascript" })
+        )
+      );
+    }
+    await workletReady;
+  }
+
+  /** Worklet + ganho individual de um cantor, plugados no barramento. */
+  async function createPlayer(peer: Peer): Promise<AudioWorkletNode> {
+    await ensureAudio();
+    const node = new AudioWorkletNode(ctx!, "jamroom-pcm-player", {
       numberOfInputs: 0,
       numberOfOutputs: 1,
       outputChannelCount: [1],
     });
     node.port.onmessage = (e) => {
-      if (typeof e.data?.fillMs === "number") lastFillMs = e.data.fillMs;
+      if (typeof e.data?.fillMs === "number") peer.lastFillMs = e.data.fillMs;
     };
-
-    // barramento de entrada da voz: recebe o worklet (caminho PCM) e o
-    // fallback de track (celular rodando código antigo)
-    voiceBus = ctx.createGain();
-    voiceBus.gain.value = 1;
-
-    // voz direta
-    const dry = ctx.createGain();
-    dry.gain.value = 0.85;
-    voiceBus.connect(dry).connect(ctx.destination);
-
-    // reverb curto (delay com feedback filtrado) — mascara a latência
-    const delay = ctx.createDelay(0.5);
-    delay.delayTime.value = 0.09;
-    const feedback = ctx.createGain();
-    feedback.gain.value = 0.32;
-    const damp = ctx.createBiquadFilter();
-    damp.type = "lowpass";
-    damp.frequency.value = 3200;
-    const wet = ctx.createGain();
-    wet.gain.value = 0.3;
-    voiceBus.connect(delay);
-    delay.connect(damp).connect(feedback).connect(delay);
-    delay.connect(wet).connect(ctx.destination);
-
-    node.connect(voiceBus);
+    const gain = ctx!.createGain();
+    node.connect(gain).connect(voiceBus!);
+    peer.gain = gain;
+    rebalanceGains();
     return node;
   }
 
   async function collectStats() {
-    if (!pc) return;
-    const connected = pc.connectionState === "connected";
-    let rttMs = 0;
-    try {
-      const stats = await pc.getStats();
-      stats.forEach((report) => {
-        if (report.type === "candidate-pair" && report.state === "succeeded") {
-          if (typeof report.currentRoundTripTime === "number") {
-            rttMs = report.currentRoundTripTime * 1000;
-          }
-        }
-      });
-    } catch {
-      return;
-    }
     const outputMs =
       ((ctx && "outputLatency" in ctx && ctx.outputLatency) ||
         ctx?.baseLatency ||
         0.02) * 1000;
-    const audioBlocked = ctx?.state !== "running";
+    const audioBlocked = ctx !== null && ctx.state !== "running";
+
+    const all = new Map<string, MicStats>();
+    const diag: Record<string, unknown> = { ctxState: ctx?.state };
+    for (const [participantId, peer] of peers) {
+      const connected = peer.pc.connectionState === "connected";
+      let rttMs = 0;
+      try {
+        const stats = await peer.pc.getStats();
+        stats.forEach((report) => {
+          if (report.type === "candidate-pair" && report.state === "succeeded") {
+            if (typeof report.currentRoundTripTime === "number") {
+              rttMs = report.currentRoundTripTime * 1000;
+            }
+          }
+        });
+      } catch {
+        continue;
+      }
+      all.set(participantId, {
+        totalMs: Math.round(CAPTURE_MS + rttMs / 2 + peer.lastFillMs + outputMs),
+        networkMs: Math.round(rttMs / 2),
+        jitterBufferMs: Math.round(peer.lastFillMs),
+        outputMs: Math.round(outputMs),
+        connected,
+        audioBlocked,
+      });
+      diag[participantId] = {
+        packets: peer.packets,
+        bytes: peer.bytes,
+        fillMs: Math.round(peer.lastFillMs),
+        connection: peer.pc.connectionState,
+      };
+    }
     // diagnóstico acessível no console da TV: window.__tvmic
-    (window as unknown as Record<string, unknown>).__tvmic = {
-      packets,
-      bytes,
-      ctxState: ctx?.state,
-      fillMs: Math.round(lastFillMs),
-      connection: pc?.connectionState,
-    };
-    onStats({
-      totalMs: Math.round(CAPTURE_MS + rttMs / 2 + lastFillMs + outputMs),
-      networkMs: Math.round(rttMs / 2),
-      jitterBufferMs: Math.round(lastFillMs),
-      outputMs: Math.round(outputMs),
-      connected,
-      audioBlocked,
-    });
+    (window as unknown as Record<string, unknown>).__tvmic = diag;
+    onStats(all);
   }
 
   async function handleOffer(participantId: string, sdp: string) {
-    teardownPeer();
-    currentSinger = participantId;
-    pc = new RTCPeerConnection();
+    // re-oferta do mesmo cantor (toggle off/on): recria só a conexão dele
+    if (peers.has(participantId)) teardownPeer(participantId);
+    if (peers.size >= MAX_TV_MICS) {
+      console.info(
+        `[tvmic] oferta de ${participantId} ignorada: já há ${peers.size} voz(es) na TV (máx ${MAX_TV_MICS})`
+      );
+      return;
+    }
+
+    const pc = new RTCPeerConnection();
+    const peer: Peer = {
+      pc,
+      player: null,
+      gain: null,
+      trackSink: null,
+      remoteReady: false,
+      pendingCandidates: [],
+      lastFillMs: TARGET_BUFFER_MS,
+      packets: 0,
+      bytes: 0,
+    };
+    peers.set(participantId, peer);
 
     pc.onicecandidate = (e) => {
       if (e.candidate) {
@@ -267,60 +329,69 @@ export function createMicReceiver(
         if (typeof msg.data === "string") {
           try {
             const header = JSON.parse(msg.data) as { type: string; sampleRate: number };
-            if (header.type === "config") player?.port.postMessage(header);
+            if (header.type === "config") peer.player?.port.postMessage(header);
           } catch {}
-        } else if (player) {
-          packets += 1;
-          bytes += (msg.data as ArrayBuffer).byteLength;
-          player.port.postMessage(msg.data, [msg.data as ArrayBuffer]);
+        } else if (peer.player) {
+          peer.packets += 1;
+          peer.bytes += (msg.data as ArrayBuffer).byteLength;
+          peer.player.port.postMessage(msg.data, [msg.data as ArrayBuffer]);
         }
       };
     };
 
     // fallback: celular rodando a versão anterior (track de áudio Opus)
     pc.ontrack = (e) => {
-      if (!ctx || !voiceBus) return;
+      if (!ctx || !voiceBus || !peer.gain) return;
       const stream = e.streams[0] ?? new MediaStream([e.track]);
       // bug conhecido do Chrome: stream remoto só soa no WebAudio se
       // também estiver preso a um elemento <audio> (mutado)
-      trackSink = new Audio();
-      trackSink.srcObject = stream;
-      trackSink.muted = true;
-      void trackSink.play().catch(() => undefined);
-      ctx.createMediaStreamSource(stream).connect(voiceBus);
+      peer.trackSink = new Audio();
+      peer.trackSink.srcObject = stream;
+      peer.trackSink.muted = true;
+      void peer.trackSink.play().catch(() => undefined);
+      ctx.createMediaStreamSource(stream).connect(peer.gain);
     };
 
-    pc.onconnectionstatechange = () => void collectStats();
+    pc.onconnectionstatechange = () => {
+      // cantor saiu no meio (celular fechou a conexão): libera a vaga
+      if (["closed", "failed", "disconnected"].includes(pc.connectionState)) {
+        if (peers.get(participantId)?.pc === pc) teardownPeer(participantId);
+        return;
+      }
+      void collectStats();
+    };
 
     // aplicar a oferta ANTES de qualquer trabalho demorado (carregar o
     // worklet) — os candidatos do celular chegam logo atrás da oferta
     await pc.setRemoteDescription({ type: "offer", sdp });
-    remoteReady = true;
-    for (const c of pendingCandidates) {
+    peer.remoteReady = true;
+    for (const c of peer.pendingCandidates) {
       void pc.addIceCandidate(c).catch(() => undefined);
     }
-    pendingCandidates = [];
+    peer.pendingCandidates = [];
 
-    player = await setupAudio();
+    peer.player = await createPlayer(peer);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     socket.emit("host:mic_signal", participantId, {
       description: { type: "answer", sdp: answer.sdp ?? "" },
     });
 
-    statsTimer = setInterval(() => void collectStats(), 1000);
+    if (!statsTimer) statsTimer = setInterval(() => void collectStats(), 1000);
   }
 
   const onSignal = (payload: { participantId: string; data: MicSignalData }) => {
     const { participantId, data } = payload;
     if (data.description?.type === "offer") {
       void handleOffer(participantId, data.description.sdp);
-    } else if (data.candidate && participantId === currentSinger) {
+    } else if (data.candidate) {
+      const peer = peers.get(participantId);
+      if (!peer) return;
       const candidate = data.candidate as RTCIceCandidateInit;
-      if (pc && remoteReady) {
-        void pc.addIceCandidate(candidate).catch(() => undefined);
+      if (peer.remoteReady) {
+        void peer.pc.addIceCandidate(candidate).catch(() => undefined);
       } else {
-        pendingCandidates.push(candidate);
+        peer.pendingCandidates.push(candidate);
       }
     }
   };
@@ -329,7 +400,7 @@ export function createMicReceiver(
   return {
     stop: () => {
       socket.off("jam:mic_signal", onSignal);
-      teardownPeer();
+      teardownAll();
     },
   };
 }

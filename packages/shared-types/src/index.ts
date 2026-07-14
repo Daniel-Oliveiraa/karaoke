@@ -79,12 +79,40 @@ export interface Participant {
 
 export type QueueItemStatus = "queued" | "playing" | "done";
 
+/** Situação de um cantor num item da fila (duetos/grupos). */
+export type SingerStatus = "invited" | "accepted" | "declined";
+
+export interface QueueSinger {
+  participantId: string;
+  status: SingerStatus;
+  invitedAt: number;
+}
+
+/** Máximo de cantores por música (legibilidade da TV). */
+export const MAX_SINGERS_PER_ITEM = 4;
+/** Máximo de celulares simultâneos como "voz na TV". */
+export const MAX_TV_MICS = 2;
+
 export interface QueueItem {
   id: string;
   songId: string;
+  /** Dono do item: quem adicionou (controla remoção e convites). */
   participantId: string;
+  /**
+   * Quem canta esta música. O dono entra automaticamente como "accepted";
+   * convidados entram como "invited" e precisam aceitar. Convites pendentes
+   * expiram ("declined") quando a música começa.
+   */
+  singers: QueueSinger[];
   status: QueueItemStatus;
   addedAt: number;
+}
+
+/** Ids dos cantores confirmados de um item (dono + convidados que aceitaram). */
+export function acceptedSingerIds(item: QueueItem): string[] {
+  return item.singers
+    .filter((s) => s.status === "accepted")
+    .map((s) => s.participantId);
 }
 
 export interface ScoreResult {
@@ -108,8 +136,11 @@ export interface Jam {
   currentItemId: string | null;
   /** Epoch ms (relógio do servidor) em que a música atual começou. */
   songStartedAt: number | null;
-  /** Resultado da última música (exibido na tela de resultado). */
-  lastResult: ScoreResult | null;
+  /**
+   * Resultados da última música, ordenados por score desc (um por cantor;
+   * solo = 1 elemento; [] = sem resultado a exibir).
+   */
+  lastResults: ScoreResult[];
   createdAt: number;
 }
 
@@ -198,7 +229,23 @@ export interface ClientToServerEvents {
   "participant:add_song": (songId: string) => void;
   /** Participante remove uma música SUA que ainda está na fila. */
   "participant:remove_song": (queueItemId: string) => void;
-  /** O cantor da vez desiste da música em andamento (sem pontuação). */
+  /**
+   * Dono de um item ainda na fila convida outro participante para cantar
+   * junto (dueto/grupo). O convite viaja no snapshot `jam:state`.
+   */
+  "participant:invite": (payload: {
+    queueItemId: string;
+    inviteeId: string;
+  }) => void;
+  /** Convidado aceita ou recusa um convite de dueto/grupo. */
+  "participant:invite_response": (payload: {
+    queueItemId: string;
+    accept: boolean;
+  }) => void;
+  /**
+   * O cantor sai da música em andamento (sem pontuação para ele). Se não
+   * sobrar nenhum cantor aceito, a música é pulada.
+   */
   "participant:skip_song": () => void;
   /** Amostra de pitch ao vivo (retransmitida ao host). */
   "participant:pitch": (sample: Omit<LivePitch, "participantId">) => void;

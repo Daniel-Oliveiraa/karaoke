@@ -44,6 +44,30 @@ export function MyResultView({
         {result.notesTotal} notas
       </p>
 
+      {/* dueto/grupo: pontuação dos parceiros lado a lado */}
+      {jam.lastResults.length > 1 && (
+        <div className="flex flex-wrap items-stretch justify-center gap-2.5">
+          {jam.lastResults
+            .filter((r) => r.participantId !== me.id)
+            .map((r) => {
+              const partner = jam.participants.find(
+                (p) => p.id === r.participantId
+              );
+              return (
+                <div
+                  key={r.participantId}
+                  className="rounded-md border border-border bg-surface px-5 py-3"
+                >
+                  <p className="max-w-28 truncate text-caption text-foreground-muted">
+                    {partner?.name ?? "?"}
+                  </p>
+                  <p className="text-body font-bold">{r.score}</p>
+                </div>
+              );
+            })}
+        </div>
+      )}
+
       <div className="rounded-lg border border-border bg-surface px-8 py-5">
         <p className="text-caption text-foreground-muted">Sua posição na Jam</p>
         <p className="text-title font-extrabold">#{myRank}</p>

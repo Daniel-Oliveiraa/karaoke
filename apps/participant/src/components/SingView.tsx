@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, PitchMeter, ProgressBar } from "@jamroom/ui";
 import type { Jam, Participant, Song } from "@jamroom/shared-types";
+import { acceptedSingerIds } from "@jamroom/shared-types";
 import { startPitchCapture, type PitchCapture } from "@/lib/pitchDetector";
 import { ScoreTracker, type FrameJudgement } from "@/lib/scoring";
 import { getSocket } from "@/lib/socket";
@@ -166,12 +167,25 @@ export function SingView({
 
   const progress = Math.min(1, Math.max(0, time / song.durationSec));
 
+  // parceiros de dueto/grupo (cantores aceitos além de mim)
+  const item = jam.queue.find((i) => i.id === jam.currentItemId);
+  const partnerNames = item
+    ? acceptedSingerIds(item)
+        .filter((id) => id !== me.id)
+        .map((id) => jam.participants.find((p) => p.id === id)?.name ?? "?")
+    : [];
+  const isGroup = partnerNames.length > 0;
+
   if (done) {
     return (
       <main className="flex min-h-dvh flex-col items-center justify-center gap-4 px-6 text-center">
         <p className="text-4xl">🎉</p>
         <p className="text-subtitle font-bold">Mandou bem, {me.name}!</p>
-        <p className="text-body text-foreground-muted">Calculando sua pontuação...</p>
+        <p className="text-body text-foreground-muted">
+          {isGroup
+            ? "Esperando os outros cantores terminarem..."
+            : "Calculando sua pontuação..."}
+        </p>
       </main>
     );
   }
@@ -186,7 +200,7 @@ export function SingView({
     >
       <header className="text-center">
         <p className="text-caption font-semibold uppercase tracking-wider text-primary">
-          É a sua vez!
+          {isGroup ? `Você + ${partnerNames.join(" + ")}` : "É a sua vez!"}
         </p>
         <p className="mt-1 text-subtitle font-bold">{song.title}</p>
         <p className="text-caption text-foreground-muted">{song.artist}</p>
@@ -289,7 +303,9 @@ export function SingView({
           onClick={() => getSocket().emit("participant:skip_song")}
           className="self-center text-caption text-foreground-muted underline-offset-2 transition-colors hover:text-foreground hover:underline"
         >
-          Desistir desta música
+          {isGroup
+            ? "Sair desta música (os outros continuam)"
+            : "Desistir desta música"}
         </button>
       </footer>
     </main>

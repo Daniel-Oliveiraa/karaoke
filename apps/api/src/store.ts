@@ -8,6 +8,7 @@ import type {
   QueueItem,
   ScoreResult,
 } from "@jamroom/shared-types";
+import { MAX_SINGERS_PER_ITEM } from "@jamroom/shared-types";
 
 /**
  * Estado das Jams em memória, com snapshot em arquivo JSON: reiniciar a
@@ -30,8 +31,13 @@ const AVATAR_COLORS = [
 
 export interface JamRecord {
   jam: Jam;
-  /** Timer de fallback caso o participante nunca envie o score. */
+  /** Timer de fallback caso algum cantor nunca envie o score. */
   resultTimeout: NodeJS.Timeout | null;
+  /**
+   * Scores já recebidos da música atual, por participantId. Só em memória:
+   * no restart o item "playing" volta para a fila de qualquer forma.
+   */
+  pendingScores: Map<string, ScoreResult> | null;
 }
 
 const jams = new Map<string, JamRecord>();
@@ -85,6 +91,24 @@ function loadJams(): void {
     for (const jam of snapshot) {
       if (!jam?.code || jam.status === "ended") continue;
       if (now - jam.createdAt > STALE_JAM_MS) continue;
+      // migração de snapshots pré-duetos (QueueItem sem singers,
+      // Jam com lastResult singular)
+      for (const item of jam.queue) {
+        if (!Array.isArray(item.singers)) {
+          item.singers = [
+            {
+              participantId: item.participantId,
+              status: "accepted",
+              invitedAt: item.addedAt,
+            },
+          ];
+        }
+      }
+      if (!Array.isArray(jam.lastResults)) {
+        const legacy = (jam as { lastResult?: ScoreResult | null }).lastResult;
+        jam.lastResults = legacy ? [legacy] : [];
+        delete (jam as { lastResult?: ScoreResult | null }).lastResult;
+      }
       if (jam.status === "playing" || jam.status === "results") {
         for (const item of jam.queue) {
           if (item.status === "playing") item.status = "queued";
@@ -94,7 +118,7 @@ function loadJams(): void {
         jam.songStartedAt = null;
       }
       for (const p of jam.participants) p.connected = false;
-      jams.set(jam.code, { jam, resultTimeout: null });
+      jams.set(jam.code, { jam, resultTimeout: null, pendingScores: null });
     }
     if (jams.size > 0) {
       console.log(
@@ -124,10 +148,10 @@ export function createJam(): JamRecord {
     queue: [],
     currentItemId: null,
     songStartedAt: null,
-    lastResult: null,
+    lastResults: [],
     createdAt: Date.now(),
   };
-  const record: JamRecord = { jam, resultTimeout: null };
+  const record: JamRecord = { jam, resultTimeout: null, pendingScores: null };
   jams.set(jam.code, record);
   return record;
 }
@@ -154,11 +178,64 @@ export function addToQueue(jam: Jam, songId: string, participantId: string): Que
     id: randomUUID(),
     songId,
     participantId,
+    singers: [
+      { participantId, status: "accepted", invitedAt: Date.now() },
+    ],
     status: "queued",
     addedAt: Date.now(),
   };
   jam.queue.push(item);
   return item;
+}
+
+/**
+ * Dono convida outro participante para cantar junto. Re-convida quem já
+ * recusou; no-op se já convidado/aceito. False = convite inválido.
+ */
+export function inviteSinger(
+  jam: Jam,
+  queueItemId: string,
+  ownerId: string,
+  inviteeId: string
+): boolean {
+  const item = jam.queue.find((i) => i.id === queueItemId);
+  if (!item || item.status !== "queued" || item.participantId !== ownerId) {
+    return false;
+  }
+  if (inviteeId === ownerId) return false;
+  if (!jam.participants.some((p) => p.id === inviteeId)) return false;
+  const existing = item.singers.find((s) => s.participantId === inviteeId);
+  if (existing) {
+    if (existing.status !== "declined") return true; // já convidado/aceito
+    existing.status = "invited";
+    existing.invitedAt = Date.now();
+    return true;
+  }
+  const active = item.singers.filter((s) => s.status !== "declined").length;
+  if (active >= MAX_SINGERS_PER_ITEM) return false;
+  item.singers.push({
+    participantId: inviteeId,
+    status: "invited",
+    invitedAt: Date.now(),
+  });
+  return true;
+}
+
+/** Convidado aceita/recusa. Só transiciona "invited" e só com item na fila. */
+export function respondInvite(
+  jam: Jam,
+  queueItemId: string,
+  participantId: string,
+  accept: boolean
+): boolean {
+  const item = jam.queue.find((i) => i.id === queueItemId);
+  if (!item || item.status !== "queued") return false;
+  const singer = item.singers.find(
+    (s) => s.participantId === participantId && s.status === "invited"
+  );
+  if (!singer) return false;
+  singer.status = accept ? "accepted" : "declined";
+  return true;
 }
 
 export function nextQueued(jam: Jam): QueueItem | undefined {
@@ -169,12 +246,14 @@ export function currentItem(jam: Jam): QueueItem | undefined {
   return jam.queue.find((i) => i.id === jam.currentItemId);
 }
 
-export function applyResult(jam: Jam, result: ScoreResult): void {
-  const item = jam.queue.find((i) => i.id === result.queueItemId);
+export function applyResults(jam: Jam, results: ScoreResult[]): void {
+  const item = jam.queue.find((i) => i.id === results[0]?.queueItemId);
   if (item) item.status = "done";
-  const participant = jam.participants.find((p) => p.id === result.participantId);
-  if (participant) participant.totalScore += result.score;
-  jam.lastResult = result;
+  for (const result of results) {
+    const participant = jam.participants.find((p) => p.id === result.participantId);
+    if (participant) participant.totalScore += result.score;
+  }
+  jam.lastResults = [...results].sort((a, b) => b.score - a.score);
 }
 
 export function endJam(record: JamRecord): void {
@@ -203,6 +282,6 @@ export function skipCurrent(jam: Jam): boolean {
   jam.status = "lobby";
   jam.currentItemId = null;
   jam.songStartedAt = null;
-  jam.lastResult = null;
+  jam.lastResults = [];
   return true;
 }

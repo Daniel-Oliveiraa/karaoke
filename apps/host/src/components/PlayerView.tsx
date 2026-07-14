@@ -2,17 +2,19 @@
 
 import { PitchMeter, ProgressBar } from "@jamroom/ui";
 import type { Jam, LivePitch, Song } from "@jamroom/shared-types";
+import { acceptedSingerIds } from "@jamroom/shared-types";
 import type { MicStats } from "@/lib/micReceiver";
 
 /**
  * Player — música em andamento. "A TV é um palco": letra protagonista,
  * fontes enormes, poucos elementos (docs/layoutDesc_extracted.txt).
+ * Duetos/grupos: um medidor de afinação por cantor, lado a lado.
  */
 export function PlayerView({
   jam,
   song,
   time,
-  pitch,
+  pitches,
   songsById,
   micStats,
   onSkip,
@@ -20,13 +22,17 @@ export function PlayerView({
   jam: Jam;
   song: Song;
   time: number;
-  pitch: LivePitch | null;
+  pitches: Map<string, LivePitch>;
   songsById: Map<string, Song>;
-  micStats?: MicStats | null;
+  micStats?: Map<string, MicStats>;
   onSkip?: () => void;
 }) {
   const item = jam.queue.find((i) => i.id === jam.currentItemId);
-  const singer = jam.participants.find((p) => p.id === item?.participantId);
+  const singers = item
+    ? acceptedSingerIds(item)
+        .map((id) => jam.participants.find((p) => p.id === id))
+        .filter((p): p is NonNullable<typeof p> => Boolean(p))
+    : [];
 
   const currentIdx = song.lines.findIndex((l) => time >= l.start && time < l.end);
   const upcomingIdx = song.lines.findIndex((l) => l.start > time);
@@ -41,9 +47,25 @@ export function PlayerView({
   const queued = jam.queue.filter((i) => i.status === "queued");
   const nextItem = queued[0];
   const nextSong = nextItem ? songsById.get(nextItem.songId) : undefined;
+  const nextSingerNames = nextItem
+    ? nextItem.singers
+        .filter((s) => s.status !== "declined")
+        .map(
+          (s) => jam.participants.find((p) => p.id === s.participantId)?.name ?? "?"
+        )
+        .join(" & ")
+    : "";
 
   const progress = Math.min(1, Math.max(0, time / song.durationSec));
   const remaining = Math.max(0, Math.round(song.durationSec - time));
+
+  // medidor "voz na TV" agregado (até 2 celulares conectados)
+  const mics = [...(micStats?.values() ?? [])];
+  const anyBlocked = mics.some((m) => m.audioBlocked);
+  const worstMic = mics.reduce<MicStats | null>(
+    (worst, m) => (worst === null || m.totalMs > worst.totalMs ? m : worst),
+    null
+  );
 
   return (
     <main
@@ -54,42 +76,47 @@ export function PlayerView({
       }}
     >
       {/* medidor do protótipo "voz na TV" */}
-      {micStats && (
+      {worstMic && (
         <div
           className={`absolute left-1/2 top-4 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full border px-4 py-1.5 backdrop-blur-glass ${
-            micStats.audioBlocked
+            anyBlocked
               ? "border-warning/60 bg-warning/15"
               : "border-white/10 bg-background/70"
           }`}
         >
           <span
             className={`inline-block h-2 w-2 rounded-full ${
-              micStats.connected ? "bg-success" : "bg-warning animate-pulse"
+              mics.every((m) => m.connected) ? "bg-success" : "bg-warning animate-pulse"
             }`}
           />
-          {micStats.audioBlocked ? (
+          {anyBlocked ? (
             <span className="text-caption font-semibold text-warning">
               Som bloqueado pelo navegador — clique na tela da TV para liberar
             </span>
           ) : (
             <>
               <span className="text-caption font-semibold text-foreground">
-                Voz na TV · ~{micStats.totalMs} ms
+                Voz na TV{mics.length > 1 ? ` ×${mics.length}` : ""} · ~
+                {worstMic.totalMs} ms
               </span>
               <span className="text-caption text-foreground-muted">
-                (rede {micStats.networkMs} · buffer {micStats.jitterBufferMs} · saída{" "}
-                {micStats.outputMs})
+                (rede {worstMic.networkMs} · buffer {worstMic.jitterBufferMs} · saída{" "}
+                {worstMic.outputMs})
               </span>
             </>
           )}
         </div>
       )}
 
-      {/* cantor atual */}
+      {/* cantores atuais */}
       <header className="flex items-start justify-between p-12">
         <div>
-          <p className="text-title font-bold">{singer?.name ?? "—"}</p>
-          <p className="mt-1 text-subtitle text-foreground-muted">cantando agora</p>
+          <p className="text-title font-bold">
+            {singers.map((p) => p.name).join(" & ") || "—"}
+          </p>
+          <p className="mt-1 text-subtitle text-foreground-muted">
+            {singers.length > 1 ? "cantando juntos" : "cantando agora"}
+          </p>
         </div>
         <div className="text-right">
           <p className="text-subtitle font-semibold">{song.title}</p>
@@ -118,12 +145,31 @@ export function PlayerView({
           </>
         )}
 
-        {/* barra de afinação ao vivo */}
-        <PitchMeter
-          className="mt-8 w-[420px] text-center"
-          centsOff={pitch?.centsOff ?? null}
-          hit={pitch?.hit ?? false}
-        />
+        {/* barra de afinação ao vivo — uma por cantor */}
+        <div className="mt-8 flex flex-wrap items-end justify-center gap-x-10 gap-y-4">
+          {singers.map((p) => {
+            const pitch = pitches.get(p.id) ?? null;
+            return (
+              <div
+                key={p.id}
+                className={`${singers.length > 1 ? "w-[300px]" : "w-[420px]"} text-center`}
+              >
+                {singers.length > 1 && (
+                  <p
+                    className="mb-2 truncate text-body font-semibold"
+                    style={{ color: p.color }}
+                  >
+                    {p.name}
+                  </p>
+                )}
+                <PitchMeter
+                  centsOff={pitch?.centsOff ?? null}
+                  hit={pitch?.hit ?? false}
+                />
+              </div>
+            );
+          })}
+        </div>
       </section>
 
       {/* barra inferior: progresso, próxima e código */}
@@ -135,7 +181,7 @@ export function PlayerView({
               <>
                 Próxima: <span className="font-semibold text-foreground">{nextSong.title}</span>
                 {" · "}
-                {jam.participants.find((p) => p.id === nextItem?.participantId)?.name}
+                {nextSingerNames}
               </>
             ) : (
               "Fila vazia — adicionem a próxima pelo celular!"
