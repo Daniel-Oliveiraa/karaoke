@@ -8,12 +8,12 @@ import type {
   ClientToServerEvents,
   ScoreResult,
   ServerToClientEvents,
-} from "@jamroom/shared-types";
+} from "@kantai/shared-types";
 import {
   INVITE_TIMEOUT_MS,
   MAX_SINGERS_PER_ITEM,
   acceptedSingerIds,
-} from "@jamroom/shared-types";
+} from "@kantai/shared-types";
 import { FULL_CATALOG, MEDIA_DIR, getSong } from "./catalog";
 import { requestImport, searchYoutube, setImporterListeners } from "./importer";
 import { bumpPlayCount, playCountOf } from "./playcounts";
@@ -36,7 +36,7 @@ import {
 /**
  * API da Jam — MVP em memória.
  *
- * Protocolo definido em @jamroom/shared-types. O host (tela da TV) é o
+ * Protocolo definido em @kantai/shared-types. O host (tela da TV) é o
  * relógio da verdade da reprodução; o participante calcula o próprio score
  * no client (pitch detection local, sem streamar áudio) e envia só o
  * resultado. O servidor valida quem pode enviar o quê e retransmite estado.
@@ -558,7 +558,7 @@ io.on("connection", (socket: JamSocket) => {
 
 httpServer.listen(PORT, () => {
   const proto = tls ? "https" : "http";
-  console.log(`[jamroom-api] ouvindo em ${proto}://localhost:${PORT}`);
+  console.log(`[kantai-api] ouvindo em ${proto}://localhost:${PORT}`);
 });
 
 if (tls && HTTP_PORT > 0) {
@@ -566,7 +566,7 @@ if (tls && HTTP_PORT > 0) {
   io.attach(plainServer);
   plainServer.listen(HTTP_PORT, () => {
     console.log(
-      `[jamroom-api] espelho HTTP (TV sem suporte a cert self-signed) em http://localhost:${HTTP_PORT}`
+      `[kantai-api] espelho HTTP (TV sem suporte a cert self-signed) em http://localhost:${HTTP_PORT}`
     );
   });
 }

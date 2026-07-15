@@ -1,4 +1,4 @@
-import { Badge, Button, Card } from "@jamroom/ui";
+import { Badge, Button, Card } from "@kantai/ui";
 import { CheckIcon } from "./icons";
 
 /**

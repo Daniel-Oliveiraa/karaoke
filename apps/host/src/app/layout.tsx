@@ -8,8 +8,8 @@ const plusJakartaSans = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "JAMROOM — Tela da TV",
-  description: "Tela host do JAMROOM para TV/projetor.",
+  title: "Kantaí — Tela da TV",
+  description: "Tela host do Kantaí para TV/projetor.",
 };
 
 export default function RootLayout({

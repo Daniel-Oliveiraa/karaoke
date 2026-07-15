@@ -31,7 +31,7 @@ RAW = "https://raw.githubusercontent.com/UltraStar-Deluxe/songs/master/Creative 
 
 
 def fetch_json(url: str):
-    req = urllib.request.Request(url, headers={"User-Agent": "jamroom-pipeline"})
+    req = urllib.request.Request(url, headers={"User-Agent": "kantai-pipeline"})
     with urllib.request.urlopen(req) as r:
         return json.load(r)
 
@@ -39,7 +39,7 @@ def fetch_json(url: str):
 def download(url: str, dest: Path) -> None:
     if dest.exists() and dest.stat().st_size > 0:
         return
-    req = urllib.request.Request(url, headers={"User-Agent": "jamroom-pipeline"})
+    req = urllib.request.Request(url, headers={"User-Agent": "kantai-pipeline"})
     with urllib.request.urlopen(req) as r, open(dest, "wb") as f:
         while chunk := r.read(1 << 16):
             f.write(chunk)

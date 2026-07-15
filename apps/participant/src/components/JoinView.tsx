@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Button } from "@jamroom/ui";
+import { Button } from "@kantai/ui";
 
 /**
  * Entrada na sessão: código (pré-preenchido quando veio do QR) + nome.
@@ -36,7 +36,7 @@ export function JoinView({
     >
       <div className="text-center">
         <p className="text-3xl font-extrabold tracking-tight">
-          JAM<span className="text-primary">ROOM</span>
+          KAN<span className="text-primary">TAÍ</span>
         </p>
         <p className="mt-2 text-body text-foreground-muted">
           Entre na Jam e cante com todo mundo

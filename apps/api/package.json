@@ -9,11 +9,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@jamroom/shared-types": "*",
+    "@kantai/shared-types": "*",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {
-    "@jamroom/config": "*",
+    "@kantai/config": "*",
     "@types/node": "^20",
     "tsx": "^4.19.2",
     "typescript": "^5"

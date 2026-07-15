@@ -1,7 +1,7 @@
 "use client";
 
-import { Avatar } from "@jamroom/ui";
-import type { Jam, Participant } from "@jamroom/shared-types";
+import { Avatar } from "@kantai/ui";
+import type { Jam, Participant } from "@kantai/shared-types";
 
 /** Encerramento do lado do participante: ranking final + agradecimento. */
 export function JamEndedView({ jam, me }: { jam: Jam; me: Participant }) {
@@ -49,7 +49,7 @@ export function JamEndedView({ jam, me }: { jam: Jam; me: Participant }) {
 
       <p className="text-center text-caption text-foreground-muted">
         Gostou? Crie a sua própria Jam em{" "}
-        <span className="font-semibold text-primary">jamroom.app</span>
+        <span className="font-semibold text-primary">kantai.online</span>
       </p>
     </main>
   );

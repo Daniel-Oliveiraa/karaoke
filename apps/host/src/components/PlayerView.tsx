@@ -1,8 +1,8 @@
 "use client";
 
-import { PitchMeter, ProgressBar } from "@jamroom/ui";
-import type { Jam, LivePitch, Song } from "@jamroom/shared-types";
-import { acceptedSingerIds } from "@jamroom/shared-types";
+import { PitchMeter, ProgressBar } from "@kantai/ui";
+import type { Jam, LivePitch, Song } from "@kantai/shared-types";
+import { acceptedSingerIds } from "@kantai/shared-types";
 import type { MicStats } from "@/lib/micReceiver";
 
 /**

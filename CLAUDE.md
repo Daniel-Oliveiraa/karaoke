@@ -1,11 +1,26 @@
-# JAMROOM — Contexto do Projeto (leia antes de qualquer tarefa)
+# KANTAÍ — Contexto do Projeto (leia antes de qualquer tarefa)
 
 > Este arquivo existe para que qualquer agente (independente do modelo) consiga continuar o
 > trabalho exatamente de onde parou, sem depender do histórico de conversa. Sempre que uma
 > decisão nova for tomada com o usuário, ou uma fase for concluída, **atualize este arquivo**.
 
-## 0. Estado ao fim de 2026-07-14 (retomar daqui)
+## 0. Estado ao fim de 2026-07-15 (retomar daqui)
 
+- **Rebrand (2026-07-15): JAMROOM → Kantaí**, domínio `kantai.online`, slogan
+  "Aumenta o som e Kantaí." Pacotes npm `@jamroom/*` → `@kantai/*` (todos os
+  `package.json`, imports `.ts/.tsx`, `tsconfig.json extends`, `next.config.ts
+  transpilePackages`, `tailwind.config.js presets` — `npm install` já rodado para
+  relinkar os symlinks/regenerar o lockfile). Logo com split KAN(branco)/TAÍ(roxo) no
+  lugar de JAM/ROOM (`Navbar.tsx`, `Footer.tsx`). Identificadores internos renomeados
+  em conjunto (client-side, sem afetar dados salvos de produção pois não há usuários
+  reais ainda): localStorage `"jamroom-session"` → `"kantai-session"`, nomes de
+  AudioWorklet `"jamroom-pcm-player"/"jamroom-pcm-sender"/"jamroom-pitch"` →
+  `"kantai-*"` (trocados nos DOIS lados de cada par sender/receiver ao mesmo tempo —
+  ver `apps/host/src/lib/micReceiver.ts`, `apps/participant/src/lib/{tvMic,
+  pitchDetector}.ts`). **Não regenerado**: o certificado dev (`certs/dev.*`) continua
+  com `CN=jamroom-dev` (regenerar invalidaria a confiança já dada pelos celulares —
+  só regerar com `CN=kantai-dev` se for reemitir o cert por outro motivo; o comando
+  documentado na seção 2 já reflete o novo CN para quando isso acontecer).
 - **Git**: mudanças desta sessão (progresso real de import + redesign da LobbyView)
   prontas para commit — ver seção "Progresso do import" e "LobbyView" abaixo. Commits
   anteriores do dia: fallback ScriptProcessor da voz na TV, aviso de autoplay, re-attach
@@ -44,7 +59,8 @@
 
 ## 1. O que é o produto
 
-SaaS de karaokê cobrado por uso diário (nome do produto: **JAMROOM**). Diferencial: modo
+SaaS de karaokê cobrado por uso diário (nome do produto: **Kantaí**; domínio: kantai.online).
+Diferencial: modo
 **"Jam/Party"** — várias pessoas no mesmo local entram numa sessão via código/QR (sem conta),
 adicionam músicas a uma fila compartilhada, e uma tela host (TV/projetor) exibe vídeo com letra
 sincronizada estilo karaokê. Ao final de cada música o sistema calcula uma pontuação por
@@ -81,8 +97,8 @@ Monorepo npm workspaces (sem Turborepo — decisão pragmática; reavaliar se o 
 | `apps/participant` | Mobile-web — Next.js (porta 3002, HTTPS) | **Funcional**: entrar por código/QR, sessão persistente (localStorage + rejoin), fila com remoção, "sua vez" com mic + score real, toggle "voz na TV" com nível, desistir da música, resultado, ranking |
 | `apps/admin` | Painel admin | **Vazio** — não iniciado |
 | `packages/shared-types` | Contratos: Song, Jam, QueueItem, PitchCurve, ScoreResult, eventos socket | **Completo** — fonte única do protocolo |
-| `packages/ui` | `@jamroom/ui`: Button, Card, Badge, Avatar, PitchMeter, ProgressBar, cn | **Base pronta** — faltam Input, Modal, Toast, Table etc. |
-| `packages/config` | `@jamroom/config`: preset Tailwind (tokens) + tsconfig base | **Completo** |
+| `packages/ui` | `@kantai/ui`: Button, Card, Badge, Avatar, PitchMeter, ProgressBar, cn | **Base pronta** — faltam Input, Modal, Toast, Table etc. |
+| `packages/config` | `@kantai/config`: preset Tailwind (tokens) + tsconfig base | **Completo** |
 | `services/audio-processing` | Ingestão: pipeline IA (Demucs+pyin+LRCLIB→Whisper) + UltraStar + batch YouTube + fix_lyrics/fix_genres | **Funcional** — 330+ músicas reais processadas; ver README do serviço |
 
 ### Como rodar (4 processos)
@@ -102,7 +118,7 @@ regenerar com o comando openssl abaixo se o IP mudar). API sobe em HTTPS automat
 `certs/dev.key`/`dev.crt` existem; participant usa `next dev --experimental-https` (script `dev`).
 ```bash
 openssl req -x509 -newkey rsa:2048 -nodes -keyout certs/dev.key -out certs/dev.crt -days 825 \
-  -subj "//CN=jamroom-dev" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:<IP-DA-MAQUINA>"
+  -subj "//CN=kantai-dev" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:<IP-DA-MAQUINA>"
 ```
 **Em rede local** (celulares de verdade): exportar `NEXT_PUBLIC_PARTICIPANT_URL=https://<IP>:3002`
 para o host (QR aponta para lá) e `NEXT_PUBLIC_API_URL=https://<IP>:4001` para host e participant.
@@ -186,7 +202,7 @@ licença e NÃO devem ser importados em massa no produto.
   Estado em memória com **snapshot em `apps/api/data/jams.json`** (`store.ts`): jams sobrevivem
   a restart da API (música tocando volta para a fila no boot; jams >24h descartadas). Sessão do
   participante persiste em localStorage no celular + rejoin. Migrar para Redis/Postgres sem
-  mudar o protocolo de `@jamroom/shared-types`. Testes: `scripts/test-persistence.mjs`.
+  mudar o protocolo de `@kantai/shared-types`. Testes: `scripts/test-persistence.mjs`.
 - **Pular/cancelar**: `host:skip_song` (botão na TV), `participant:skip_song` (cantor sai da
   música — num grupo os demais continuam; se ninguém sobrar, pula) e
   `participant:remove_song` (✕ nos itens próprios da fila) — pular não pontua.
@@ -247,7 +263,7 @@ licença e NÃO devem ser importados em massa no produto.
   "Pop/Rock"; ids corrigidos em `lyrics_backup/genres_fixed.txt`.
 - **Redesign da LobbyView (TV, 2026-07-14)**: tela de lobby (`apps/host/src/components/
   LobbyView.tsx`) redesenhada a partir de um esboço do usuário (`docs/jam-layout.png`):
-  header com logo JAMROOM, headline "Sua Jam está aberta!" com destaque roxo, label
+  header com logo Kantaí (split KAN/TAÍ), headline "Sua Jam está aberta!" com destaque roxo, label
   "ENTRE NA JAM" + glow ao redor do QR, divisor "ou use o código", seção "PARTICIPANTES"
   (uppercase, contagem alinhada à direita) com linhas em card (não mais pills), rodapé
   com ícone de pessoas + status. **Decisão do usuário**: sem identidade/nome de anfitrião
@@ -322,7 +338,7 @@ Fonte completa: `docs/layoutDesc_extracted.txt`. Tokens em `packages/config/tail
 - Referências por superfície: Landing = streaming; TV = "um palco" (fontes enormes, pouquíssimos
   elementos, nunca dashboard); Mobile = Spotify (entrar→nome→música em <30s, botão principal
   fixo); Admin = Linear/GitHub/Vercel (denso, tabular).
-- Reaproveitar `@jamroom/ui` + preset em qualquer app novo (ver `apps/*/tailwind.config.js`).
+- Reaproveitar `@kantai/ui` + preset em qualquer app novo (ver `apps/*/tailwind.config.js`).
 
 ## 5. Roadmap (estado em 2026-07-14)
 
@@ -363,7 +379,8 @@ Fonte completa: `docs/layoutDesc_extracted.txt`. Tokens em `packages/config/tail
    e o pipeline IA cobre qualquer par áudio original + instrumental).
 
 ## 6. Convenções observadas (seguir ao continuar)
-- Nome do produto: **JAMROOM** (pacotes `@jamroom/*`). Copy de produto e comentários em pt-BR;
+- Nome do produto: **Kantaí** (pacotes `@kantai/*`; domínio kantai.online; slogan "Aumenta o
+  som e Kantaí."). Copy de produto e comentários em pt-BR;
   código (identificadores) em inglês.
 - Protocolo cliente-servidor: mudar SEMPRE começando por `packages/shared-types/src/index.ts`
   (tipos + eventos), depois api, depois clients. Rodar `scripts/test-protocol.mjs` após.

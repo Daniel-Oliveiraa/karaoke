@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Button, PitchMeter, ProgressBar } from "@jamroom/ui";
-import type { Jam, Participant, Song } from "@jamroom/shared-types";
-import { acceptedSingerIds } from "@jamroom/shared-types";
+import { Button, PitchMeter, ProgressBar } from "@kantai/ui";
+import type { Jam, Participant, Song } from "@kantai/shared-types";
+import { acceptedSingerIds } from "@kantai/shared-types";
 import { startPitchCapture, type PitchCapture } from "@/lib/pitchDetector";
 import { ScoreTracker, type FrameJudgement } from "@/lib/scoring";
 import { getSocket } from "@/lib/socket";

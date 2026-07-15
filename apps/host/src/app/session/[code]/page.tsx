@@ -1,8 +1,8 @@
 "use client";
 
 import { use, useEffect, useMemo, useRef, useState } from "react";
-import type { Jam, LivePitch, Song } from "@jamroom/shared-types";
-import { Button } from "@jamroom/ui";
+import type { Jam, LivePitch, Song } from "@kantai/shared-types";
+import { Button } from "@kantai/ui";
 import { EndedView } from "@/components/EndedView";
 import { LobbyView } from "@/components/LobbyView";
 import { PlayerView } from "@/components/PlayerView";

@@ -1,6 +1,6 @@
 
     
-    JAMROOM — Design System e Guia de Interface
+    Kantaí — Design System e Guia de Interface
     
     Objetivo
     Desenvolver uma aplicação SaaS moderna com aparência premium, inspirada nos melhores produtos atuais como Spotify, Linear, Discord, Notion, Vercel e Apple TV.

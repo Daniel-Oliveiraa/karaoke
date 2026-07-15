@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Button } from "@jamroom/ui";
+import { Button } from "@kantai/ui";
 import { getSocket } from "@/lib/socket";
 
 /**
@@ -37,10 +37,10 @@ export default function HostHome() {
     >
       <div>
         <p className="text-4xl font-extrabold tracking-tight">
-          JAM<span className="text-primary">ROOM</span>
+          KAN<span className="text-primary">TAÍ</span>
         </p>
         <p className="mt-2 text-subtitle text-foreground-muted">
-          Tela da TV · Everybody sings.
+          Tela da TV · Aumenta o som e Kantaí.
         </p>
       </div>
 

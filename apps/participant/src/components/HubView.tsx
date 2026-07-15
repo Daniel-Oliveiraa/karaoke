@@ -1,15 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Avatar, Badge, Button, ProgressBar } from "@jamroom/ui";
+import { Avatar, Badge, Button, ProgressBar } from "@kantai/ui";
 import type {
   ImportJob,
   Jam,
   Participant,
   Song,
   YoutubeResult,
-} from "@jamroom/shared-types";
-import { MAX_SINGERS_PER_ITEM } from "@jamroom/shared-types";
+} from "@kantai/shared-types";
+import { MAX_SINGERS_PER_ITEM } from "@kantai/shared-types";
 import { getSocket } from "@/lib/socket";
 
 /**

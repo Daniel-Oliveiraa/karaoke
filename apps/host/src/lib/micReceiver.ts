@@ -1,7 +1,7 @@
 "use client";
 
-import type { MicSignalData } from "@jamroom/shared-types";
-import { MAX_TV_MICS } from "@jamroom/shared-types";
+import type { MicSignalData } from "@kantai/shared-types";
+import { MAX_TV_MICS } from "@kantai/shared-types";
 import { getSocket } from "./socket";
 
 /**
@@ -147,7 +147,7 @@ class PcmPlayer extends AudioWorkletProcessor {
     return true;
   }
 }
-registerProcessor("jamroom-pcm-player", PcmPlayer);
+registerProcessor("kantai-pcm-player", PcmPlayer);
 `;
 
 /** Report periódico (1s) dos motores de playback. */
@@ -446,7 +446,7 @@ export function createMicReceiver(
       return new ScriptProcessorPlayer(ctx!, gain, onReport);
     }
 
-    const node = new AudioWorkletNode(ctx!, "jamroom-pcm-player", {
+    const node = new AudioWorkletNode(ctx!, "kantai-pcm-player", {
       numberOfInputs: 0,
       numberOfOutputs: 1,
       outputChannelCount: [1],

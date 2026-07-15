@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ImportJob, Song, YoutubeResult } from "@jamroom/shared-types";
+import type { ImportJob, Song, YoutubeResult } from "@kantai/shared-types";
 import { addProcessedSong, getSong } from "./catalog";
 
 /**

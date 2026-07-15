@@ -2,7 +2,7 @@ import * as React from "react";
 import { cn } from "../utils/cn";
 
 /**
- * Barra de progresso fina com o gradiente primário do JAMROOM.
+ * Barra de progresso fina com o gradiente primário do Kantaí.
  * Usada no player da TV e na tela de canto do participante.
  */
 export interface ProgressBarProps

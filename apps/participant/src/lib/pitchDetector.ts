@@ -131,7 +131,7 @@ class PitchProcessor extends AudioWorkletProcessor {
     this.port.postMessage({ hz: sr / refined, clarity: nsdf[lag], level: rms });
   }
 }
-registerProcessor("jamroom-pitch", PitchProcessor);
+registerProcessor("kantai-pitch", PitchProcessor);
 `;
 
 let workletUrl: string | null = null;
@@ -161,7 +161,7 @@ export async function startPitchCapture(
   await ctx.audioWorklet.addModule(workletUrl);
 
   const source = ctx.createMediaStreamSource(stream);
-  const node = new AudioWorkletNode(ctx, "jamroom-pitch", {
+  const node = new AudioWorkletNode(ctx, "kantai-pitch", {
     numberOfInputs: 1,
     numberOfOutputs: 0,
   });

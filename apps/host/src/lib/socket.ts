@@ -4,7 +4,7 @@ import { io, type Socket } from "socket.io-client";
 import type {
   ClientToServerEvents,
   ServerToClientEvents,
-} from "@jamroom/shared-types";
+} from "@kantai/shared-types";
 
 export type JamSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 

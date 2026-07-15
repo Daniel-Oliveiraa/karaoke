@@ -1,8 +1,8 @@
 {
-  "name": "@jamroom/config",
+  "name": "@kantai/config",
   "version": "0.0.1",
   "private": true,
-  "description": "Design tokens compartilhados do JAMROOM (preset Tailwind + tsconfig base).",
+  "description": "Design tokens compartilhados do Kantaí (preset Tailwind + tsconfig base).",
   "main": "tailwind-preset.js",
   "files": [
     "tailwind-preset.js",

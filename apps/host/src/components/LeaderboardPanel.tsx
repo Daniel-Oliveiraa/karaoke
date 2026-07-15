@@ -1,7 +1,7 @@
 "use client";
 
-import { Avatar } from "@jamroom/ui";
-import type { Participant } from "@jamroom/shared-types";
+import { Avatar } from "@kantai/ui";
+import type { Participant } from "@kantai/shared-types";
 
 /** Ranking ao vivo — painel lateral da tela host (glass, blur pequeno). */
 export function LeaderboardPanel({

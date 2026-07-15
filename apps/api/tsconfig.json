@@ -1,5 +1,5 @@
 {
-  "extends": "@jamroom/config/tsconfig.base.json",
+  "extends": "@kantai/config/tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
     "types": ["node"]

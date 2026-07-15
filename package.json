@@ -1,5 +1,5 @@
 {
-  "name": "jamroom",
+  "name": "kantai",
   "private": true,
   "workspaces": [
     "apps/*",

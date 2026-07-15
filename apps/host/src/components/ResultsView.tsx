@@ -1,7 +1,7 @@
 "use client";
 
-import { Avatar, Badge } from "@jamroom/ui";
-import type { Jam, Song } from "@jamroom/shared-types";
+import { Avatar, Badge } from "@kantai/ui";
+import type { Jam, Song } from "@kantai/shared-types";
 import { LeaderboardPanel } from "./LeaderboardPanel";
 
 function Star({ filled, size }: { filled: boolean; size: number }) {

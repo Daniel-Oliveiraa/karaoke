@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Avatar } from "@jamroom/ui";
-import type { Jam, Song } from "@jamroom/shared-types";
+import { Avatar } from "@kantai/ui";
+import type { Jam, Song } from "@kantai/shared-types";
 import QRCode from "qrcode";
 import { PARTICIPANT_URL } from "@/lib/socket";
 import { LeaderboardPanel } from "./LeaderboardPanel";
@@ -70,9 +70,9 @@ export function LobbyView({
       {/* header */}
       <header className="text-center">
         <p className="text-2xl font-extrabold tracking-tight">
-          JAM<span className="text-primary">ROOM</span>
+          KAN<span className="text-primary">TAÍ</span>
         </p>
-        <p className="mt-1 text-caption text-foreground-muted">Everybody sings.</p>
+        <p className="mt-1 text-caption text-foreground-muted">Aumenta o som e Kantaí.</p>
       </header>
 
       {/* conteúdo: grid de duas colunas ocupando o espaço restante */}

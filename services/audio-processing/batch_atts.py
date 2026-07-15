@@ -40,7 +40,7 @@ def download(url: str, dest: Path) -> None:
         print(f"  ja existe: {dest.name}")
         return
     print(f"  baixando {dest.name}...")
-    req = urllib.request.Request(url, headers={"User-Agent": "jamroom-pipeline"})
+    req = urllib.request.Request(url, headers={"User-Agent": "kantai-pipeline"})
     with urllib.request.urlopen(req) as r, open(dest, "wb") as f:
         while chunk := r.read(1 << 16):
             f.write(chunk)

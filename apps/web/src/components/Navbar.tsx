@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Button } from "@jamroom/ui";
+import { Button } from "@kantai/ui";
 
 const NAV_LINKS = [
   { label: "Como funciona", href: "#como-funciona" },
@@ -15,10 +15,10 @@ export function Navbar() {
       <div className="mx-auto flex h-20 max-w-[1440px] items-center justify-between px-6 sm:px-8 lg:px-16">
         <Link href="#top" className="flex flex-col leading-none">
           <span className="text-lg font-extrabold tracking-tight text-foreground">
-            JAM<span className="text-primary">ROOM</span>
+            KAN<span className="text-primary">TAÍ</span>
           </span>
           <span className="mt-0.5 text-[11px] font-medium tracking-wide text-foreground-muted">
-            Everybody sings.
+            Aumenta o som e Kantaí.
           </span>
         </Link>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import type { Jam, Participant, ScoreResult, Song } from "@jamroom/shared-types";
+import type { Jam, Participant, ScoreResult, Song } from "@kantai/shared-types";
 
 /** Resultado da própria performance, logo após cantar. */
 export function MyResultView({

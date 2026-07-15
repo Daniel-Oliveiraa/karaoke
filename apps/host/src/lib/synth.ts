@@ -1,6 +1,6 @@
 "use client";
 
-import { midiToHz, type Song } from "@jamroom/shared-types";
+import { midiToHz, type Song } from "@kantai/shared-types";
 
 /**
  * Player da tela host. Dois modos:

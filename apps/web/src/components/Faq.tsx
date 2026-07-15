@@ -9,12 +9,12 @@ const QUESTIONS: { question: string; answer: string }[] = [
   {
     question: "Preciso instalar algum aplicativo?",
     answer:
-      "Não. A TV abre o JAMROOM num navegador e os participantes entram pelo celular escaneando o QR Code ou digitando o código da Jam. Ninguém instala nada, ninguém cria conta para participar.",
+      "Não. A TV abre o Kantaí num navegador e os participantes entram pelo celular escaneando o QR Code ou digitando o código da Jam. Ninguém instala nada, ninguém cria conta para participar.",
   },
   {
     question: "Como funciona a pontuação por voz real?",
     answer:
-      "Durante a música, o microfone do celular de quem está cantando capta a voz e o JAMROOM compara a afinação com a melodia original, nota a nota. A pontuação considera afinação e constância — não é sorteio nem número aleatório.",
+      "Durante a música, o microfone do celular de quem está cantando capta a voz e o Kantaí compara a afinação com a melodia original, nota a nota. A pontuação considera afinação e constância — não é sorteio nem número aleatório.",
   },
   {
     question: "Quantas pessoas podem participar de uma Jam?",
@@ -24,7 +24,7 @@ const QUESTIONS: { question: string; answer: string }[] = [
   {
     question: "Preciso de equipamento especial?",
     answer:
-      "Só uma TV (ou projetor) com navegador e os celulares dos convidados. Caixa de som e microfone dedicados melhoram a experiência, mas não são obrigatórios — em breve você também poderá alugar equipamento direto pelo JAMROOM.",
+      "Só uma TV (ou projetor) com navegador e os celulares dos convidados. Caixa de som e microfone dedicados melhoram a experiência, mas não são obrigatórios — em breve você também poderá alugar equipamento direto pelo Kantaí.",
   },
   {
     question: "Funciona em qualquer TV?",
@@ -34,7 +34,7 @@ const QUESTIONS: { question: string; answer: string }[] = [
   {
     question: "E se a internet do local for fraca?",
     answer:
-      "O JAMROOM foi pensado para redes de festa: a detecção de voz roda no próprio celular (não enviamos seu áudio para a internet) e o tráfego entre os aparelhos é leve. Uma conexão 4G ou Wi-Fi doméstico é suficiente.",
+      "O Kantaí foi pensado para redes de festa: a detecção de voz roda no próprio celular (não enviamos seu áudio para a internet) e o tráfego entre os aparelhos é leve. Uma conexão 4G ou Wi-Fi doméstico é suficiente.",
   },
 ];
 

@@ -1,10 +1,10 @@
 """
-JAMROOM - pipeline de ingestao de musicas reais.
+Kantaí - pipeline de ingestao de musicas reais.
 
 Entrada:  faixa original COM voz (para extrair a referencia de afinacao)
           + faixa instrumental (a que toca na TV; se nao houver, o proprio
           Demucs gera uma a partir da original).
-Saida:    <id>.json (formato Song de @jamroom/shared-types) + <id>.mp3
+Saida:    <id>.json (formato Song de @kantai/shared-types) + <id>.mp3
           copiados para apps/api/media/, de onde a API serve o catalogo.
 
 Etapas (as mesmas do plano para o catalogo B2B):
@@ -218,7 +218,7 @@ def audio_duration(audio_path: Path) -> float:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Ingestao de musica real do JAMROOM")
+    ap = argparse.ArgumentParser(description="Ingestao de musica real do Kantaí")
     ap.add_argument("--original", required=True, help="faixa COM voz (mp3/wav)")
     ap.add_argument("--instrumental", help="faixa karaoke; se omitida, o Demucs gera")
     ap.add_argument("--id", required=True, help="slug unico (ex: knock)")
@@ -235,7 +235,7 @@ def main() -> None:
 
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(prefix="jamroom-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="kantai-") as tmp:
         workdir = Path(tmp)
         vocals = separate_vocals(original, workdir)
 

@@ -1,6 +1,6 @@
 "use client";
 
-import type { MicSignalData } from "@jamroom/shared-types";
+import type { MicSignalData } from "@kantai/shared-types";
 import { getSocket } from "./socket";
 
 /**
@@ -68,7 +68,7 @@ class PcmSender extends AudioWorkletProcessor {
     return true;
   }
 }
-registerProcessor("jamroom-pcm-sender", PcmSender);
+registerProcessor("kantai-pcm-sender", PcmSender);
 `;
 
 export async function startTvMic(
@@ -111,7 +111,7 @@ export async function startTvMic(
   });
 
   const source = ctx.createMediaStreamSource(stream);
-  const sender = new AudioWorkletNode(ctx, "jamroom-pcm-sender", {
+  const sender = new AudioWorkletNode(ctx, "kantai-pcm-sender", {
     numberOfInputs: 1,
     numberOfOutputs: 0,
   });

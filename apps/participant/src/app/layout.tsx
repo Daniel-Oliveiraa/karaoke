@@ -8,7 +8,7 @@ const plusJakartaSans = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "JAMROOM — Entrar na Jam",
+  title: "Kantaí — Entrar na Jam",
   description: "Entre na Jam, escolha sua música e cante.",
 };
 

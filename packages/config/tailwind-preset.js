@@ -1,11 +1,11 @@
 /**
- * @jamroom/config — Tailwind preset com os design tokens do JAMROOM.
+ * @kantai/config — Tailwind preset com os design tokens do Kantaí.
  *
  * Fonte: docs/layoutDesc_extracted.txt (Design System e Guia de Interface) + docs/layout.png.
  *
  * Uso em outros pacotes/apps (tailwind.config.js):
  *   module.exports = {
- *     presets: [require('@jamroom/config/tailwind-preset')],
+ *     presets: [require('@kantai/config/tailwind-preset')],
  *     content: [...],
  *   }
  */

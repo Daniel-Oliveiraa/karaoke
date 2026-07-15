@@ -46,7 +46,7 @@ def itunes_genre(title: str, artist: str) -> str | None:
     url = "https://itunes.apple.com/search?" + urllib.parse.urlencode(
         {"term": term, "media": "music", "limit": 1, "country": "BR"}
     )
-    req = urllib.request.Request(url, headers={"User-Agent": "JAMROOM/0.1"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Kantai/0.1"})
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.load(resp)

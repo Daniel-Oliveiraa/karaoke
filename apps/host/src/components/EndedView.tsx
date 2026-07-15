@@ -1,6 +1,6 @@
 "use client";
 
-import type { Jam } from "@jamroom/shared-types";
+import type { Jam } from "@kantai/shared-types";
 import { LeaderboardPanel } from "./LeaderboardPanel";
 
 /** Encerramento: ranking final + resumo da sessão. */
@@ -36,7 +36,7 @@ export function EndedView({ jam }: { jam: Jam }) {
 
       <p className="text-subtitle text-foreground-muted">
         {sung} música{sung === 1 ? "" : "s"} cantada{sung === 1 ? "" : "s"} ·{" "}
-        {durationMin} min de Jam · JAM<span className="text-primary">ROOM</span>
+        {durationMin} min de Jam · KAN<span className="text-primary">TAÍ</span>
       </p>
     </main>
   );

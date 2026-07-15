@@ -1,4 +1,4 @@
-import { Button } from "@jamroom/ui";
+import { Button } from "@kantai/ui";
 import {
   InstagramIcon,
   PlusIcon,
@@ -23,7 +23,7 @@ const FOOTER_COLUMNS: {
     title: "Suporte",
     links: [
       { label: "Perguntas frequentes", href: "#faq" },
-      { label: "Fale conosco", href: "mailto:contato@jamroom.app" },
+      { label: "Fale conosco", href: "mailto:contato@kantai.online" },
       { label: "Para empresas e eventos", href: "#planos" },
     ],
   },
@@ -77,10 +77,10 @@ export function Footer() {
           <div className="grid grid-cols-1 gap-12 border-t border-border pt-12 sm:grid-cols-2 lg:grid-cols-5">
             <div className="lg:col-span-2">
               <p className="text-lg font-extrabold tracking-tight text-foreground">
-                JAM<span className="text-primary">ROOM</span>
+                KAN<span className="text-primary">TAÍ</span>
               </p>
               <p className="mt-1 text-caption text-foreground-muted">
-                Everybody sings.
+                Aumenta o som e Kantaí.
               </p>
               <p className="mt-4 max-w-xs text-caption leading-relaxed text-foreground-muted">
                 Karaokê colaborativo com pontuação por voz real, direto na sua
@@ -123,7 +123,7 @@ export function Footer() {
 
           <div className="mt-12 flex flex-col items-center justify-between gap-4 border-t border-border pt-8 sm:flex-row">
             <p className="text-caption text-foreground-muted">
-              © {new Date().getFullYear()} JAMROOM. Todos os direitos
+              © {new Date().getFullYear()} Kantaí. Todos os direitos
               reservados.
             </p>
             <p className="text-caption text-foreground-muted">

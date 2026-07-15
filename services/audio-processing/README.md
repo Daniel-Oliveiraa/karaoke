@@ -1,6 +1,6 @@
 # services/audio-processing — ingestão de músicas reais
 
-Transforma um par de arquivos de áudio numa música completa do JAMROOM
+Transforma um par de arquivos de áudio numa música completa do Kantaí
 (letra sincronizada + curva de pitch de referência + instrumental para a TV).
 
 ## Requisitos

@@ -8,7 +8,7 @@ const plusJakartaSans = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "JAMROOM — Transforme qualquer TV em um karaokê",
+  title: "Kantaí — Transforme qualquer TV em um karaokê",
   description:
     "Abra uma Jam, convide todo mundo e cantem juntos. Pontuação por voz real e ranking ao vivo, direto na TV e no celular, sem instalar nada.",
 };

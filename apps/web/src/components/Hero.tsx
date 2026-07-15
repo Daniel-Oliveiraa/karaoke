@@ -1,4 +1,4 @@
-import { Avatar, Button } from "@jamroom/ui";
+import { Avatar, Button } from "@kantai/ui";
 import {
   BatteryIcon,
   CrownIcon,

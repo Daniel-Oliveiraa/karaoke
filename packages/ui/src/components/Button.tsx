@@ -4,7 +4,7 @@ import * as React from "react";
 import { cn } from "../utils/cn";
 
 /**
- * Existem apenas quatro variantes de botão no Design System do JAMROOM
+ * Existem apenas quatro variantes de botão no Design System do Kantaí
  * (docs/layoutDesc_extracted.txt — seção "Botões"):
  * - primary: fundo roxo, texto branco, hover levemente mais claro.
  * - secondary: transparente, borda cinza, hover com background sutil.

@@ -1,4 +1,4 @@
-import { Avatar } from "@jamroom/ui";
+import { Avatar } from "@kantai/ui";
 import { CrownIcon, MicIcon, PlayIcon } from "./icons";
 
 /**
@@ -13,7 +13,7 @@ export function DemoSection() {
       <div className="mx-auto max-w-[1440px]">
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl font-extrabold tracking-tight text-foreground sm:text-title">
-            Veja o JAMROOM em ação
+            Veja o Kantaí em ação
           </h2>
           <p className="mt-4 text-body leading-relaxed text-foreground-muted">
             Da criação da Jam ao ranking final: uma noite inteira de karaokê em
@@ -24,7 +24,7 @@ export function DemoSection() {
         <div className="relative mx-auto mt-12 max-w-4xl">
           <button
             type="button"
-            aria-label="Assistir demonstração do JAMROOM"
+            aria-label="Assistir demonstração do Kantaí"
             className="group relative block w-full overflow-hidden rounded-lg border border-border shadow-soft transition-transform duration-300 hover:scale-[1.01] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >
             <div className="relative aspect-video">

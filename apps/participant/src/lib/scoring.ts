@@ -5,7 +5,7 @@ import {
   semitoneDistance,
   type MelodyNote,
   type Song,
-} from "@jamroom/shared-types";
+} from "@kantai/shared-types";
 
 /**
  * Acumulador de score de uma performance. Recebe frames de pitch com o

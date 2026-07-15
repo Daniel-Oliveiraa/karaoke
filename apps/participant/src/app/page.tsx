@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { Jam, Participant, Song } from "@jamroom/shared-types";
-import { acceptedSingerIds } from "@jamroom/shared-types";
+import type { Jam, Participant, Song } from "@kantai/shared-types";
+import { acceptedSingerIds } from "@kantai/shared-types";
 import { HubView } from "@/components/HubView";
 import { JamEndedView } from "@/components/JamEndedView";
 import { JoinView } from "@/components/JoinView";
@@ -10,7 +10,7 @@ import { MyResultView } from "@/components/MyResultView";
 import { SingView } from "@/components/SingView";
 import { getSocket } from "@/lib/socket";
 
-const SESSION_KEY = "jamroom-session";
+const SESSION_KEY = "kantai-session";
 const RESTORE_TIMEOUT_MS = 4000;
 
 /**

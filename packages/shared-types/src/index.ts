@@ -1,5 +1,5 @@
 /**
- * @jamroom/shared-types — contratos compartilhados entre api, host e
+ * @kantai/shared-types — contratos compartilhados entre api, host e
  * participant. Fonte única de verdade dos dados da Jam: qualquer mudança
  * de protocolo começa aqui.
  */

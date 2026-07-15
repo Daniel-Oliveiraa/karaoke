@@ -42,7 +42,7 @@ BACKUP = HERE / "lyrics_backup"
 FIXED_LIST = BACKUP / "fixed.txt"
 
 API = "https://lrclib.net/api"
-USER_AGENT = "JAMROOM-personal-karaoke/0.1 (estudo pessoal)"
+USER_AGENT = "Kantai-personal-karaoke/0.1 (estudo pessoal)"
 DURATION_TOLERANCE_S = 4
 MIN_LINES = 4  # letra sincronizada com menos que isso e lixo/instrumental
 

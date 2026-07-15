@@ -7,7 +7,7 @@ import type {
   Participant,
   QueueItem,
   ScoreResult,
-} from "@jamroom/shared-types";
+} from "@kantai/shared-types";
 
 /**
  * Estado das Jams em memória, com snapshot em arquivo JSON: reiniciar a

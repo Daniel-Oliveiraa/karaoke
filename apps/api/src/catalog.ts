@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { LyricLine, MelodyNote, Song } from "@jamroom/shared-types";
+import type { LyricLine, MelodyNote, Song } from "@kantai/shared-types";
 
 /**
  * Catálogo DEMO do MVP: cantigas brasileiras de domínio público, com a

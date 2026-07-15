@@ -1,8 +1,8 @@
 """
-JAMROOM - importador de arquivos UltraStar (.txt).
+Kantaí - importador de arquivos UltraStar (.txt).
 
 O formato UltraStar (UltraStar Deluxe/Performous/Vocaluxe) traz tudo que o
-JAMROOM precisa, sem pipeline pesado: melodia nota a nota (com TOM, que
+Kantaí precisa, sem pipeline pesado: melodia nota a nota (com TOM, que
 vira a referencia de afinacao do score) e letra sincronizada por silaba.
 
 Uso:
@@ -180,7 +180,7 @@ def main() -> None:
         import subprocess
         import tempfile
 
-        with tempfile.TemporaryDirectory(prefix="jamroom-us-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="kantai-us-") as tmp:
             subprocess.run(
                 [sys.executable, "-m", "demucs", "--two-stems=vocals",
                  "-n", "htdemucs", "-o", tmp, str(audio_path)],
