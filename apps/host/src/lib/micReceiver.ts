@@ -78,18 +78,18 @@ const SCRIPT_PROCESSOR_BUFFER_MS = 30;
  * suavização do buffer (STRETCH_K/MAX_STRETCH) já lida bem com o alvo se
  * movendo aos poucos, mas um salto grande ainda seria perceptível.
  */
-const WORKLET_MIN_TARGET_MS = 6;
-const SCRIPT_PROCESSOR_MIN_TARGET_MS = 12;
+const WORKLET_MIN_TARGET_MS = 4;
+const SCRIPT_PROCESSOR_MIN_TARGET_MS = 8;
 const MAX_TARGET_MS = 60;
 /**
- * Quantas vezes o jitter medido vira margem de segurança no alvo. Reduzido
- * de 4x pra 2.5x (medido 91ms totais, buffer sozinho em 23ms — margem
- * generosa demais) — seguro reduzir porque a suavização (STRETCH_K/
- * MAX_STRETCH) já evita estalo mesmo quando o alvo erra pra menos; o pior
- * caso vira uma correção suave, não um corte seco. Se voltar a crepitar
- * em rede ruim de festa, suba de volta.
+ * Quantas vezes o jitter medido vira margem de segurança no alvo. Apertado
+ * de 2.5x pra 1.5x a pedido do usuário, sabendo do risco: essa é a margem
+ * MAIS agressiva antes de virar aposta — em rede pior que a testada (ex.:
+ * Wi-Fi de festa cheio de gente), a suavização pode não dar conta e voltar
+ * a engasgar. Se estalar, primeira coisa a fazer é subir isso de volta
+ * (2.5 é o valor anterior validado; 4 era o original mais conservador).
  */
-const JITTER_TARGET_MULTIPLIER = 2.5;
+const JITTER_TARGET_MULTIPLIER = 1.5;
 /** Passo máximo de ajuste do alvo por ciclo (~1s). */
 const TARGET_STEP_MS = 2;
 
