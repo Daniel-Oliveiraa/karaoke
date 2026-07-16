@@ -129,10 +129,15 @@ export async function startTvMic(
       },
     }));
 
-  // latencyHint numérico (em vez do preset "interactive") pede um buffer
-  // de captura menor explicitamente — mesmo raciocínio do lado da TV
-  // (micReceiver.ts), o navegador ainda limita ao que o hardware aguenta.
-  const ctx = new AudioContext({ latencyHint: 0.01 });
+  // "interactive" (não um número menor): testado e revertido — pedir um
+  // buffer de captura mais agressivo não reduziu latência nenhuma (o
+  // sistema operacional já limita ao que o hardware aguenta) e teve um
+  // efeito colateral real: em alguns aparelhos isso troca o mic de um
+  // perfil "comunicação" (que costuma ter supressão de ruído própria do
+  // SO, por baixo das constraints do getUserMedia abaixo) pra um perfil
+  // "cru", captando mais ruído de fundo. Não repetir esse experimento
+  // sem validar direito o trade-off.
+  const ctx = new AudioContext({ latencyHint: "interactive" });
   if (ctx.state === "suspended") await ctx.resume();
   await ctx.audioWorklet.addModule(
     URL.createObjectURL(new Blob([SENDER_WORKLET], { type: "application/javascript" }))
