@@ -82,14 +82,15 @@ const WORKLET_MIN_TARGET_MS = 4;
 const SCRIPT_PROCESSOR_MIN_TARGET_MS = 8;
 const MAX_TARGET_MS = 60;
 /**
- * Quantas vezes o jitter medido vira margem de segurança no alvo. Apertado
- * de 2.5x pra 1.5x a pedido do usuário, sabendo do risco: essa é a margem
- * MAIS agressiva antes de virar aposta — em rede pior que a testada (ex.:
- * Wi-Fi de festa cheio de gente), a suavização pode não dar conta e voltar
- * a engasgar. Se estalar, primeira coisa a fazer é subir isso de volta
- * (2.5 é o valor anterior validado; 4 era o original mais conservador).
+ * Quantas vezes o jitter medido vira margem de segurança no alvo.
+ * Histórico: 4 (original conservador) → 2.5 → 1.5 → **de volta pra 2.5 em
+ * 2026-07-16**: com 1.5 o usuário reportou estalos em uso real no PC dele
+ * (a previsão documentada aqui se confirmou — 1.5 era a margem mais
+ * agressiva antes de virar aposta). 2.5 é o último valor validado sem
+ * estalo; NÃO descer de novo pra 1.5 sem o anti-estalo abaixo se provar
+ * insuficiente primeiro. Se ainda estalar em festa: subir pra 4.
  */
-const JITTER_TARGET_MULTIPLIER = 1.5;
+const JITTER_TARGET_MULTIPLIER = 2.5;
 /** Passo máximo de ajuste do alvo por ciclo (~1s). */
 const TARGET_STEP_MS = 2;
 
@@ -108,6 +109,20 @@ const TARGET_STEP_MS = 2;
 const STRETCH_K = 0.02;
 const MAX_STRETCH = 0.03;
 
+/**
+ * Anti-estalo (declick, 2026-07-16): o "clique" audível de um underrun é a
+ * DESCONTINUIDADE da forma de onda (cortar de uma amostra qualquer direto
+ * pra zero), não o silêncio em si. Dois remendos de custo zero em latência:
+ * - underrun termina com uma cauda exponencial (última amostra × 0.95^n,
+ *   ~1ms até inaudível) em vez de corte seco;
+ * - a retomada (buffer reencheu) entra com fade-in de ~128 amostras (~3ms)
+ *   em vez de começar do nada no meio da onda.
+ * Não elimina o BURACO de som (isso é papel da margem de buffer acima),
+ * só tira o estalo de borda dele.
+ */
+const UNDERRUN_DECAY = 0.95;
+const FADE_IN_SAMPLES = 128;
+
 const PLAYER_WORKLET = `
 class PcmPlayer extends AudioWorkletProcessor {
   constructor() {
@@ -124,6 +139,8 @@ class PcmPlayer extends AudioWorkletProcessor {
     this.inSumSq = 0; // energia RECEBIDA da rede desde o ultimo report
     this.inN = 0;
     this.lastStretchReported = 0;
+    this.lastSample = 0; // ultima amostra emitida (cauda do declick)
+    this.fadeGain = 0;   // fade-in na retomada (ver UNDERRUN_DECAY/FADE_IN)
     this.targetMs = ${WORKLET_BUFFER_MS}; // ponto de partida — alvo adaptativo ajusta depois
     this.port.onmessage = (e) => {
       const d = e.data;
@@ -162,15 +179,19 @@ class PcmPlayer extends AudioWorkletProcessor {
     const baseRatio = this.srcRate / sampleRate;
 
     if (!this.started) {
-      if (this.fill() >= target) this.started = true;
+      if (this.fill() >= target) { this.started = true; this.fadeGain = 0; }
       else { out.fill(0); return true; }
     }
 
     let lastStretch = 0;
     for (let i = 0; i < out.length; i++) {
       if (this.fill() < 1) {
-        // vazio de verdade (nada pra interpolar): silêncio e reencher do zero
-        out.fill(0, i);
+        // vazio de verdade (nada pra interpolar): cauda exponencial em vez
+        // de corte seco (anti-estalo) e reencher do zero
+        for (let j = i; j < out.length; j++) {
+          this.lastSample *= ${UNDERRUN_DECAY};
+          out[j] = this.lastSample;
+        }
         this.started = false;
         this.underruns++;
         break;
@@ -182,7 +203,11 @@ class PcmPlayer extends AudioWorkletProcessor {
       const frac = this.readIdx - idx;
       const a = this.ring[idx % this.ring.length];
       const b = this.ring[(idx + 1) % this.ring.length];
-      out[i] = a + (b - a) * frac;
+      out[i] = (a + (b - a) * frac) * this.fadeGain;
+      if (this.fadeGain < 1) {
+        this.fadeGain = Math.min(1, this.fadeGain + 1 / ${FADE_IN_SAMPLES});
+      }
+      this.lastSample = out[i];
       this.sumSq += out[i] * out[i];
       this.sumN++;
       this.readIdx += ratio;
@@ -191,9 +216,13 @@ class PcmPlayer extends AudioWorkletProcessor {
 
     // trava de segurança contra estouro do próprio ring (~1s de
     // capacidade) — só deveria disparar numa rajada extrema; o caso comum
-    // de buffer alto já é corrigido suavemente acima, sem estalo
+    // de buffer alto já é corrigido suavemente acima, sem estalo. O salto
+    // de readIdx é uma descontinuidade — fade-in de novo (anti-estalo).
     const hardMax = this.ring.length * 0.9;
-    if (this.fill() > hardMax) this.readIdx = this.writeIdx - target;
+    if (this.fill() > hardMax) {
+      this.readIdx = this.writeIdx - target;
+      this.fadeGain = 0;
+    }
 
     if (currentTime - this.lastReport > 1) {
       this.lastReport = currentTime;
@@ -258,6 +287,10 @@ class ScriptProcessorPlayer implements VoicePlayer {
   private inSumSq = 0;
   private inN = 0;
   private lastStretch = 0;
+  /** Última amostra emitida (cauda do declick) — ver UNDERRUN_DECAY. */
+  private lastSample = 0;
+  /** Fade-in na retomada pós-underrun — ver FADE_IN_SAMPLES. */
+  private fadeGain = 0;
   private targetMs = SCRIPT_PROCESSOR_BUFFER_MS; // ponto de partida — alvo adaptativo ajusta depois
 
   constructor(
@@ -308,8 +341,10 @@ class ScriptProcessorPlayer implements VoicePlayer {
     const baseRatio = this.srcRate / this.ctx.sampleRate;
 
     if (!this.started) {
-      if (this.fill() >= target) this.started = true;
-      else {
+      if (this.fill() >= target) {
+        this.started = true;
+        this.fadeGain = 0;
+      } else {
         out.fill(0);
         this.report();
         return;
@@ -318,8 +353,12 @@ class ScriptProcessorPlayer implements VoicePlayer {
 
     for (let i = 0; i < out.length; i++) {
       if (this.fill() < 1) {
-        // vazio de verdade (nada pra interpolar): silêncio e reencher do zero
-        out.fill(0, i);
+        // vazio de verdade (nada pra interpolar): cauda exponencial em vez
+        // de corte seco (anti-estalo) e reencher do zero
+        for (let j = i; j < out.length; j++) {
+          this.lastSample *= UNDERRUN_DECAY;
+          out[j] = this.lastSample;
+        }
         this.started = false;
         this.underruns++;
         break;
@@ -331,16 +370,23 @@ class ScriptProcessorPlayer implements VoicePlayer {
       const frac = this.readIdx - idx;
       const a = this.ring[idx % this.ring.length]!;
       const b = this.ring[(idx + 1) % this.ring.length]!;
-      out[i] = a + (b - a) * frac;
+      out[i] = (a + (b - a) * frac) * this.fadeGain;
+      if (this.fadeGain < 1) {
+        this.fadeGain = Math.min(1, this.fadeGain + 1 / FADE_IN_SAMPLES);
+      }
+      this.lastSample = out[i]!;
       this.sumSq += out[i]! * out[i]!;
       this.sumN++;
       this.readIdx += ratio;
     }
 
     // trava de segurança contra estouro do próprio ring — ver comentário
-    // equivalente no PLAYER_WORKLET
+    // equivalente no PLAYER_WORKLET (salto = descontinuidade, fade-in)
     const hardMax = this.ring.length * 0.9;
-    if (this.fill() > hardMax) this.readIdx = this.writeIdx - target;
+    if (this.fill() > hardMax) {
+      this.readIdx = this.writeIdx - target;
+      this.fadeGain = 0;
+    }
     this.report();
   }
 

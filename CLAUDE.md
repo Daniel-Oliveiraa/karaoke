@@ -112,11 +112,17 @@
     estalar.
   - Alvo de buffer **adaptativo** por jitter medido de verdade (não mais
     fixo): `WORKLET_MIN_TARGET_MS=4`, `SCRIPT_PROCESSOR_MIN_TARGET_MS=8`,
-    `MAX_TARGET_MS=60`, `JITTER_TARGET_MULTIPLIER=1.5` (ajustado
-    4→2.5→1.5 ao longo da sessão, testado a cada redução sem estalar no
-    PC do usuário). **Se voltar a crepitar numa festa de verdade, a
-    primeira coisa a fazer é subir `JITTER_TARGET_MULTIPLIER` de volta**
-    (2.5 já validado antes; 4 é o original conservador).
+    `MAX_TARGET_MS=60`, `JITTER_TARGET_MULTIPLIER=2.5` (histórico:
+    4→2.5→1.5→**2.5 de novo** — com 1.5 o usuário reportou estalos em uso
+    real depois da reversão da v3, exatamente o risco documentado; 2.5 é
+    o último validado sem estalo. Se estalar em festa: subir pra 4).
+  - **Anti-estalo (declick, adicionado junto com a volta pra 2.5)**:
+    underrun termina com cauda exponencial (`UNDERRUN_DECAY=0.95`) em vez
+    de corte seco pra zero, e retomada/salto duro do ring entram com
+    fade-in (`FADE_IN_SAMPLES=128`, ~3ms) — o clique de underrun é a
+    descontinuidade da onda, não o silêncio. Custo zero em latência; nos
+    dois motores (worklet e ScriptProcessor). Validado com
+    `DEBUG_JITTER_MS=30` (underruns tratados, sem crash, sem runaway).
   - Motor ativo (`worklet`/`script-processor`) exposto **na própria tela**
     (badge "Voz na TV"), não só no console — Smart TV raramente tem
     devtools acessível.
@@ -433,8 +439,11 @@ licença e NÃO devem ser importados em massa no produto.
   `MAX_STRETCH = 0.03` (corrige a taxa de reprodução em até 3% pra convergir ao alvo sem
   estalar, tanto no overrun quanto no underrun). **Alvo de buffer adaptativo** por jitter
   medido (RFC3550-style): `WORKLET_MIN_TARGET_MS = 4`, `SCRIPT_PROCESSOR_MIN_TARGET_MS = 8`,
-  `MAX_TARGET_MS = 60` (teto duro), `JITTER_TARGET_MULTIPLIER = 1.5`, `TARGET_STEP_MS = 2`
-  (reavaliado a cada ~1s, nunca pula — só desliza). Captura em 1 render quantum
+  `MAX_TARGET_MS = 60` (teto duro), `JITTER_TARGET_MULTIPLIER = 2.5` (1.5 estalou em uso
+  real — ver seção 0), `TARGET_STEP_MS = 2`
+  (reavaliado a cada ~1s, nunca pula — só desliza). **Declick**: underrun sai com cauda
+  exponencial e retomada entra com fade-in (~3ms) — tira o estalo de borda sem custo de
+  latência (`UNDERRUN_DECAY`/`FADE_IN_SAMPLES`). Captura em 1 render quantum
   (`CHUNKS_PER_PACKET = 1`, ~2.7ms, `CAPTURE_MS = 6` de estimativa fixa do lado do
   celular). `AudioContext({ latencyHint })`: `"interactive"` no celular (testado `0.01`
   numérico e revertido — captava mais ruído de fundo, provável troca de perfil de áudio
@@ -457,8 +466,8 @@ licença e NÃO devem ser importados em massa no produto.
   `apps/participant/src/lib/tvMic.ts`, `apps/host/src/lib/micReceiver.ts`. **Pendente**:
   validação numa Smart TV real (só testado no PC do usuário) e numa rede de festa de
   verdade (só o injetor sintético até agora). Se crepitar numa festa real, a primeira
-  coisa a tentar é subir `JITTER_TARGET_MULTIPLIER` (histórico: já testado em 4, 2.5 e
-  1.5, todos sem estalo no PC do usuário — 4 é o mais conservador). Fatores fora do
+  coisa a tentar é subir `JITTER_TARGET_MULTIPLIER` de 2.5 pra 4 (1.5 já provou que
+  estala; o declick reduz a audibilidade mas não substitui margem). Fatores fora do
   código que dominam a latência residual: caixa Bluetooth (+100–300ms — usar HDMI/cabo),
   "modo jogo" da TV (20–100ms), Wi-Fi 5GHz vs 2.4GHz. Mic dedicado (Fase 4) segue sendo
   o premium.
