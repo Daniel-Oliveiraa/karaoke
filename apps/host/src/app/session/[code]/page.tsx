@@ -7,7 +7,7 @@ import { EndedView } from "@/components/EndedView";
 import { LobbyView } from "@/components/LobbyView";
 import { PlayerView } from "@/components/PlayerView";
 import { ResultsView } from "@/components/ResultsView";
-import { createMicReceiver, type MicStats } from "@/lib/micReceiver";
+import { createMicReceiver, type MicEngine, type MicStats } from "@/lib/micReceiver";
 import { API_URL, getSocket } from "@/lib/socket";
 import { playSong, type SynthPlayback } from "@/lib/synth";
 
@@ -37,6 +37,10 @@ export default function SessionPage({
   const [micStats, setMicStats] = useState<Map<string, MicStats>>(new Map());
   /** Autoplay travou o áudio da voz — a TV precisa de um clique/tecla. */
   const [micBlocked, setMicBlocked] = useState(false);
+  /** Motor de playback ativo (worklet = rápido; script-processor = fallback
+   * de contexto inseguro, +~21ms) — exposto na UI pois Smart TVs raramente
+   * têm devtools acessível pra checar window.__tvmic.engine. */
+  const [micEngine, setMicEngine] = useState<MicEngine>(null);
 
   const playbackRef = useRef<SynthPlayback | null>(null);
   const endedSentRef = useRef(false);
@@ -129,9 +133,10 @@ export default function SessionPage({
   // "voz na TV": receptor WebRTC ativo enquanto uma música toca
   useEffect(() => {
     if (!playingItemId) return;
-    const receiver = createMicReceiver((stats, blocked) => {
+    const receiver = createMicReceiver((stats, blocked, engine) => {
       setMicStats(stats);
       setMicBlocked(blocked);
+      setMicEngine(engine);
     });
     return () => receiver.stop();
   }, [playingItemId]);
@@ -212,6 +217,7 @@ export default function SessionPage({
           songsById={songsById}
           micStats={micStats}
           micBlocked={micBlocked}
+          micEngine={micEngine}
           onSkip={() => getSocket().emit("host:skip_song")}
         />
       );

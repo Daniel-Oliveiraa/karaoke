@@ -1,9 +1,12 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { PitchMeter, ProgressBar } from "@kantai/ui";
 import type { Jam, LivePitch, Song } from "@kantai/shared-types";
 import { acceptedSingerIds } from "@kantai/shared-types";
-import type { MicStats } from "@/lib/micReceiver";
+import type { MicEngine, MicStats } from "@/lib/micReceiver";
+import { PARTICIPANT_URL } from "@/lib/socket";
+import QRCode from "qrcode";
 
 /**
  * Player — música em andamento. "A TV é um palco": letra protagonista,
@@ -18,6 +21,7 @@ export function PlayerView({
   songsById,
   micStats,
   micBlocked,
+  micEngine,
   onSkip,
 }: {
   jam: Jam;
@@ -28,8 +32,24 @@ export function PlayerView({
   micStats?: Map<string, MicStats>;
   /** Autoplay travou o áudio da voz — mostrar o aviso mesmo sem conexão. */
   micBlocked?: boolean;
+  /** Motor de playback ativo — Smart TVs raramente têm devtools acessível
+   * pra checar window.__tvmic.engine, então mostramos aqui também. */
+  micEngine?: MicEngine;
   onSkip?: () => void;
 }) {
+  const [qr, setQr] = useState<string | null>(null);
+  const joinUrl = `${PARTICIPANT_URL}/?code=${jam.code}`;
+
+  useEffect(() => {
+    QRCode.toDataURL(joinUrl, {
+      width: 160,
+      margin: 1,
+      color: { dark: "#09090B", light: "#FFFFFF" },
+    })
+      .then(setQr)
+      .catch(() => setQr(null));
+  }, [joinUrl]);
+
   const item = jam.queue.find((i) => i.id === jam.currentItemId);
   const singers = item
     ? acceptedSingerIds(item)
@@ -106,7 +126,8 @@ export function PlayerView({
               </span>
               <span className="text-caption text-foreground-muted">
                 (rede {worstMic?.networkMs ?? 0} · buffer{" "}
-                {worstMic?.jitterBufferMs ?? 0} · saída {worstMic?.outputMs ?? 0})
+                {worstMic?.jitterBufferMs ?? 0} · saída {worstMic?.outputMs ?? 0} ·
+                motor {micEngine === "script-processor" ? "fallback" : micEngine ?? "?"})
               </span>
             </>
           )}
@@ -176,6 +197,20 @@ export function PlayerView({
           })}
         </div>
       </section>
+
+      {/* QR fixo num canto: quem chegar depois consegue entrar mesmo com a música rolando */}
+      {qr && (
+        <div className="absolute bottom-32 left-6 z-10 flex items-center gap-3 rounded-lg border border-white/10 bg-background/80 p-2.5 backdrop-blur-glass">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={qr} alt={`QR Code para entrar na Jam ${jam.code}`} className="h-20 w-20 rounded" />
+          <div className="pr-1.5">
+            <p className="text-[0.65rem] font-semibold uppercase tracking-wider text-foreground-muted">
+              Entrar na Jam
+            </p>
+            <p className="text-subtitle font-bold tracking-widest text-foreground">{jam.code}</p>
+          </div>
+        </div>
+      )}
 
       {/* barra inferior: progresso, próxima e código */}
       <footer className="border-t border-white/10 bg-background/70 px-12 py-6 backdrop-blur-glass">

@@ -19,6 +19,13 @@ import { getSocket } from "./socket";
  * (maxRetransmits: 0). Pacotes menores = mais overhead de rede, irrelevante
  * na LAN, mas reduz a espera de empacotamento no celular (era 8ms c/ 3
  * chunks; ver CAPTURE_MS no micReceiver da TV).
+ *
+ * Cada pacote leva um cabeçalho de 8 bytes (seq uint32 + captureTimeUs
+ * uint32, ambos via DataView — ToUint32 já faz o wrap sozinho) antes do
+ * PCM: dá pro receptor (micReceiver.ts) medir perda/reordenamento reais
+ * e a latência celular→TV de verdade, em vez de só inferir pelo RTT da
+ * conexão inteira. ~3% de overhead num pacote de 256 bytes, irrelevante
+ * na LAN (mesmo raciocínio de banda do parágrafo acima).
  */
 export interface TvMicSession {
   stop: () => void;
@@ -26,6 +33,25 @@ export interface TvMicSession {
 
 const CHUNKS_PER_PACKET = 1; // 128 amostras = ~2.7ms @48kHz (1 render quantum)
 const MAX_BUFFERED_BYTES = 32 * 1024; // descarta se o canal congestionar
+
+/**
+ * Injetor de jitter sintético, só pra teste (scripts/test-tv-mic.py) — a
+ * LAN de verdade não tem jitter perceptível, então validar a suavização do
+ * buffer (STRETCH_K/MAX_STRETCH no micReceiver.ts) exige jitter simulado.
+ * Ligado via `localStorage.setItem("kantai-debug-jitter-ms", "30")` no
+ * celular ANTES de "Liberar microfone e cantar" (não precisa reiniciar o
+ * dev server, já que o teste conecta em servidores já rodando). Cada
+ * pacote leva um atraso aleatório de 0..N ms (o próprio atraso variável já
+ * produz reordenamento — pacotes com atraso menor podem ultrapassar os
+ * enviados antes com atraso maior) + ~2% de perda simulada. Nunca ativado
+ * em uso normal (a chave só existe se alguém escrever nela manualmente).
+ */
+function readDebugJitterMs(): number {
+  if (typeof window === "undefined") return 0;
+  const raw = window.localStorage.getItem("kantai-debug-jitter-ms");
+  const n = raw ? Number(raw) : 0;
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
 
 const SENDER_WORKLET = `
 class PcmSender extends AudioWorkletProcessor {
@@ -35,6 +61,7 @@ class PcmSender extends AudioWorkletProcessor {
     this.sumSq = 0;
     this.nSamples = 0;
     this.lastLevel = 0;
+    this.seq = 0;
   }
   process(inputs) {
     const ch = inputs[0] && inputs[0][0];
@@ -44,7 +71,11 @@ class PcmSender extends AudioWorkletProcessor {
     this.nSamples += ch.length;
     if (this.chunks.length >= ${CHUNKS_PER_PACKET}) {
       const n = this.chunks.reduce((s, c) => s + c.length, 0);
-      const out = new Int16Array(n);
+      const buf = new ArrayBuffer(8 + n * 2);
+      const view = new DataView(buf);
+      view.setUint32(0, this.seq++);
+      view.setUint32(4, Math.floor(currentTime * 1e6));
+      const out = new Int16Array(buf, 8);
       let o = 0;
       for (const c of this.chunks) {
         for (let i = 0; i < c.length; i++) {
@@ -52,7 +83,7 @@ class PcmSender extends AudioWorkletProcessor {
           out[o++] = v < 0 ? v * 0x8000 : v * 0x7fff;
         }
       }
-      this.port.postMessage(out.buffer, [out.buffer]);
+      this.port.postMessage(buf, [buf]);
       this.chunks = [];
     }
     // nível de voz a cada ~0.5s — a UI usa para detectar captura muda
@@ -117,6 +148,22 @@ export async function startTvMic(
   });
   source.connect(sender);
 
+  const debugJitterMs = readDebugJitterMs();
+  function sendPacket(buf: ArrayBuffer) {
+    if (debugJitterMs <= 0) {
+      if (dc.readyState === "open" && dc.bufferedAmount < MAX_BUFFERED_BYTES) {
+        dc.send(buf);
+      }
+      return;
+    }
+    if (Math.random() < 0.02) return; // ~2% de perda simulada
+    setTimeout(() => {
+      if (dc.readyState === "open" && dc.bufferedAmount < MAX_BUFFERED_BYTES) {
+        dc.send(buf);
+      }
+    }, Math.random() * debugJitterMs);
+  }
+
   dc.onopen = () => {
     // header: taxa de amostragem do celular (a TV faz o resampling)
     dc.send(JSON.stringify({ type: "config", sampleRate: ctx.sampleRate }));
@@ -124,9 +171,7 @@ export async function startTvMic(
       e: MessageEvent<ArrayBuffer | { type: "level"; rms: number }>
     ) => {
       if (e.data instanceof ArrayBuffer) {
-        if (dc.readyState === "open" && dc.bufferedAmount < MAX_BUFFERED_BYTES) {
-          dc.send(e.data);
-        }
+        sendPacket(e.data);
       } else if (e.data?.type === "level") {
         options?.onLevel?.(e.data.rms);
       }

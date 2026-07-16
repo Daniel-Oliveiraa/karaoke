@@ -4,6 +4,12 @@ e a TV deve estabelecer a conexao WebRTC (fake mic do Chromium) e exibir o
 medidor de latencia com estado conectado.
 
 Requer: api (4001), host (3001) e participant (3002) rodando.
+
+DEBUG_JITTER_MS=25 python scripts/test-tv-mic.py ativa o injetor de jitter
+sintetico do celular (tvMic.ts, gated por localStorage) antes de ligar a voz
+na TV, pra validar a suavizacao do buffer (STRETCH_K/MAX_STRETCH no
+micReceiver.ts) sob rede instavel simulada, em vez de so o caminho de LAN
+ideal (sem jitter real) que o resto do teste cobre.
 """
 import os
 import re
@@ -46,6 +52,14 @@ def main():
         phone.get_by_role("button", name="Adicionar", exact=True).click()
 
         phone.wait_for_selector("text=É a sua vez", timeout=20000)
+
+        jitter_ms = int(os.environ.get("DEBUG_JITTER_MS", "0"))
+        if jitter_ms > 0:
+            phone.evaluate(
+                f"localStorage.setItem('kantai-debug-jitter-ms', '{jitter_ms}')"
+            )
+            print(f"jitter sintetico ligado: {jitter_ms}ms")
+
         phone.click("text=Liberar microfone e cantar")
         phone.wait_for_selector("text=Voz na TV desligada", timeout=15000)
         print("ok - cantando, toggle disponivel")
@@ -70,9 +84,17 @@ def main():
         if not samples:
             raise AssertionError("medidor nunca exibiu latencia")
         best = min(samples)
+        worst = max(samples)
         print(f"ok - medidor ativo (minimo {best}ms em headless; amostras {samples})")
         if best > 2000:
             raise AssertionError(f"latencia implausivel ate para headless: {best}ms")
+        # com a suavizacao (P2), o atraso nunca deveria crescer sem limite —
+        # mesmo com jitter sintetico injetado o pico observado tem que ficar
+        # numa faixa razoavel (nao e um numero exato, so descarta runaway)
+        if jitter_ms > 0 and worst > 1500:
+            raise AssertionError(
+                f"atraso parece estar crescendo sem controle sob jitter: {samples}"
+            )
 
         # o som esta de fato fluindo? (pacotes PCM chegando + contexto tocando)
         # __tvmic e {ctxState, <participantId>: {packets, ...}} — um bloco
@@ -95,6 +117,20 @@ def main():
             raise AssertionError(f"AudioContext da TV nao esta tocando: {dbg2}")
         if total_packets(dbg2) <= total_packets(dbg1):
             raise AssertionError(f"pacotes de voz nao estao fluindo: {dbg1} -> {dbg2}")
+
+        # P1 (medicao real) + confirmacao de que o audio vai direto
+        # celular<->TV na LAN (nunca via "relay" — nao configuramos TURN)
+        for participant_id, peer_dbg in dbg2.items():
+            if not isinstance(peer_dbg, dict):
+                continue
+            for field in ("oneWayLatencyMs", "lossPct", "reorderCount", "candidateType", "stretch"):
+                if field not in peer_dbg:
+                    raise AssertionError(f"campo {field} ausente em __tvmic[{participant_id}]: {peer_dbg}")
+            if "relay" in str(peer_dbg.get("candidateType")):
+                raise AssertionError(
+                    f"conexao passou por relay (deveria ser sempre direto na LAN): {peer_dbg}"
+                )
+        print("ok - campos de P1 presentes e conexao confirmada como direta (sem relay)")
         # outRms do worklet = RMS emitido ao mixer, MEDIA de 1s inteiro.
         # (o outputRms do analyser e um snapshot de ~43ms e cai no silencio
         # entre os bips do mic fake — nao serve de assert)
