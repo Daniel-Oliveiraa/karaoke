@@ -555,7 +555,13 @@ export function createMicReceiver(
   /** Contexto + barramento de voz (dry + reverb) compartilhados, 1x. */
   async function ensureAudio(): Promise<void> {
     if (!ctx) {
-      ctx = new AudioContext({ latencyHint: "interactive" });
+      // latencyHint numérico (em vez do preset "interactive") pede um
+      // buffer de saída menor explicitamente — "interactive" já é o preset
+      // mais agressivo, mas alguns navegadores/dispositivos aceitam um
+      // alvo ainda menor se pedido como número. O navegador ainda limita
+      // ao que o hardware aguenta sem estourar; ver outputMs no MicStats
+      // pra saber o valor real que ele escolheu.
+      ctx = new AudioContext({ latencyHint: 0.01 });
       // Política de autoplay: se a página da TV foi carregada sem nenhum
       // clique, o contexto nasce suspenso (mudo). Tenta retomar já, e de
       // novo a cada gesto até conseguir; o estado vai no MicStats para a

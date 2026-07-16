@@ -129,7 +129,10 @@ export async function startTvMic(
       },
     }));
 
-  const ctx = new AudioContext({ latencyHint: "interactive" });
+  // latencyHint numérico (em vez do preset "interactive") pede um buffer
+  // de captura menor explicitamente — mesmo raciocínio do lado da TV
+  // (micReceiver.ts), o navegador ainda limita ao que o hardware aguenta.
+  const ctx = new AudioContext({ latencyHint: 0.01 });
   if (ctx.state === "suspended") await ctx.resume();
   await ctx.audioWorklet.addModule(
     URL.createObjectURL(new Blob([SENDER_WORKLET], { type: "application/javascript" }))
