@@ -3,11 +3,13 @@
 # Node (Socket.io) + Python (yt-dlp/Demucs/ffmpeg) na mesma imagem porque
 # a importação ao vivo do YouTube spawna esses scripts como subprocesso.
 #
-# Deploy: como apps/api/media e apps/api/data são gitignored (não existem
-# no GitHub), este serviço é enviado via `railway up` (upload direto do
-# diretório local, não do repositório) — inclui o catálogo atual (~2GB)
-# como "semente" (ver docker/api-entrypoint.sh), copiada para o volume
-# persistente montado em /data na primeira execução.
+# Deploy: `railway up` quebra no Windows (panic Rust ao empacotar os ~2GB
+# de media) — o fluxo real é `docker build` local + `docker push` pro GHCR +
+# "Redeploy" manual no dashboard do Railway (Settings → Source → Connect
+# Image), ver CLAUDE.md seção 7. Como apps/api/media e apps/api/data são
+# gitignored (não existem no GitHub), o catálogo atual entra na imagem como
+# "semente" (ver docker/api-entrypoint.sh), copiada para o volume
+# persistente montado em /data na primeira execução (volume vazio).
 FROM node:20-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

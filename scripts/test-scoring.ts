@@ -8,10 +8,10 @@
  * Uso: npx tsx scripts/test-scoring.ts
  */
 import { midiToHz } from "../packages/shared-types/src/index";
-import { CATALOG } from "../apps/api/src/catalog";
+import { FULL_CATALOG } from "../apps/api/src/catalog";
 import { ScoreTracker } from "../apps/participant/src/lib/scoring";
 
-const song = CATALOG[0]!;
+const song = FULL_CATALOG[0]!;
 const FRAME = 0.05; // ~20 fps como o worklet real
 
 function simulate(offsetSemitones: number | null, clarity = 0.9): number {

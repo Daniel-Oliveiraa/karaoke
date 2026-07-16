@@ -166,26 +166,103 @@
     não quebra sob jitter/perda simulados.
   - **Pendente**: não validado ainda numa Smart TV real (só no PC do
     usuário) nem numa rede de festa de verdade (só o injetor sintético).
+  - **1ª medição em hardware real de TV (2026-07-16, depois do deploy do
+    resync duro) — dispositivo: Fire TV Stick 4K (Fire OS/Android, não
+    Smart TV nativa): rede 17ms, buffer 52ms, saída 336ms, total 404ms.**
+    `rede` e `buffer` batem com o esperado do código (buffer bem dentro do
+    teto matemático de alvo+80ms = ~140ms no pior caso — o resync duro está
+    funcionando). **`saída` (`outputMs`, latência de hardware reportada
+    pelo próprio `AudioContext.outputLatency`) é 7x o piso medido no PC do
+    usuário (48ms) e domina o total sozinha (83%)** — **fora do alcance do
+    código do ring buffer** (que só controla `buffer`, não `saída`).
+    Hipótese mais provável dado o dispositivo: **latência de plataforma do
+    próprio Fire OS/Android** — o pipeline de áudio do Android (AudioFlinger
+    + buffers do HAL) é conhecido por ser bem mais folgado que desktop, e
+    processamento adicional de HDMI (passthrough Dolby/DTS pra AVR/soundbar
+    em vez de PCM estéreo direto) soma ainda mais. Não é algo que o código
+    web consegue contornar — é o driver de áudio do sistema por baixo do
+    Chromium do Fire TV. Coisas pra tentar do lado das configurações (não
+    código), em ordem de impacto esperado: (1) em Configurações → Exibir e
+    sons → Áudio no Fire TV, trocar de "Dolby Digital"/passthrough para
+    "Estéreo" ou "Automático" (passthrough adiciona processamento); (2) se
+    o som sai por soundbar/receiver via ARC, testar direto na TV (cada salto
+    HDMI extra soma); (3) verificar se existe "modo jogo" na própria TV
+    (reduz processamento de imagem E às vezes áudio). Se nada disso baixar
+    o número, ~300ms+ de saída pode ser um piso de plataforma do Fire TV
+    Stick — vale medir o mesmo teste num Chromecast/Smart TV nativa/outro
+    dispositivo pra saber se é o Fire TV especificamente ou toda a cadeia
+    física (TV + o que estiver plugado nela).
 
 - **QR code da Jam agora aparece também DURANTE a música tocando**
   (`PlayerView.tsx`, canto inferior esquerdo, com o código por baixo) —
   antes só existia na `LobbyView` antes de começar. Deixa quem chega depois
   entrar mesmo com alguém já cantando.
 
-- **Tela distorcida/cortada em Smart TV — TvScaleFrame v2 (preencher, não
-  letterbox)**: `apps/host/src/components/TvScaleFrame.tsx` — o app da TV
-  renderiza sempre num quadro fixo de 1920x1080 escalado pro viewport real.
-  A v1 usava escala UNIFORME + barras pretas; **testada na TV real do
-  usuário e rejeitada** (o navegador da TV reporta viewport não-16:9 →
-  sobravam barras laterais, tela "apertada" sem ocupar o painel). v2 escala
-  CADA eixo pra preencher 100% (distorção de poucos % num navegador de TV
-  quase-16:9, contra barras que incomodam de verdade). Também: `position:
-  fixed` + top/left/right/bottom explícitos (sem `inset`/100vh — navegador
-  de TV antigo), re-medição com timeouts 500ms/2.5s (viewport de TV assenta
-  depois do load sem disparar resize). Validado via Playwright em 4
-  viewports (todos preenchem 100%; distorção 0% em 16:9 exato, 8-10% só
-  nos casos sintéticos extremos) — **pendente confirmação visual na TV
-  real do usuário**.
+- **Tela distorcida/cortada em Smart TV — TvScaleFrame v3 (híbrido
+  fill/letterbox)**: `apps/host/src/components/TvScaleFrame.tsx` — o app da
+  TV renderiza sempre num quadro fixo de 1920x1080 escalado pro viewport
+  real. v1 = escala UNIFORME + barras pretas; **testada na TV real do
+  usuário e rejeitada** (viewport da TV reporta não-16:9 → sobravam barras
+  laterais). v2 = escala CADA eixo pra preencher 100% sempre — resolveu a
+  TV, mas **o usuário também abre o host num monitor ultrawide normal, e aí
+  a distorção fica óbvia** (2026-07-16, mesmo dia). v3 (atual) é híbrido:
+  calcula a razão entre os dois fatores de escala (`scaleX/scaleY`) e só
+  estica pra preencher quando essa razão está dentro de `MAX_AXIS_RATIO =
+  1.15` (cobre as variações de TV já vistas, ~10%, com folga); fora dessa
+  faixa (ultrawide 21:9 ≈ 1.31, portrait, janela redimensionada) cai pro
+  scale uniforme + barras centralizadas (mesma lógica da v1, agora
+  condicional). Offsets de centralização calculados em pixels (não
+  `margin: auto`/flex) pelo mesmo motivo de sempre — TV antiga lida mal com
+  unidade relativa. Validado via Playwright: 1920×1080 e viewport ~5% fora
+  de 16:9 preenchem 100% (comportamento de TV preservado); 21:9 e 32:9
+  agora fazem pillarbox centralizado em vez de esticar (captura de tela
+  confirmada) — **pendente ainda: confirmação visual na TV real** (só o
+  comportamento de TV foi validado matematicamente/via Playwright, não
+  numa TV de verdade).
+
+- **Limpeza de catálogo (2026-07-16, a pedido do usuário)**: duas remoções.
+  (1) As 5 "cantigas de roda" demo (grade MIDI hardcoded, playback
+  sintetizado) foram REMOVIDAS de `apps/api/src/catalog.ts` — eram só
+  aproximações de ouvido, incorretas/pouco reconhecíveis; o arquivo agora
+  só carrega `PROCESSED` (músicas reais do pipeline) como `FULL_CATALOG`,
+  sem catálogo hardcoded nenhum. `scripts/test-scoring.ts` (que usava
+  `CATALOG[0]` como música sintética de teste) foi ajustado pra usar
+  `FULL_CATALOG[0]` (uma música real qualquer — o teste só precisa de
+  `notes[]` com midi/start/duration, não importa a origem). (2) As 17
+  músicas do Josh Woodward (CC BY 4.0) também foram REMOVIDAS — artista
+  pouco reconhecível pro contexto do produto. Arquivos apagados localmente
+  (`apps/api/media/*.json`+`.mp3`), mas **o volume persistente do Railway em
+  produção já estava com esses arquivos semeados** (a semeadura desde
+  `/app/seed` só roda com o volume vazio — seção 7) — um `git push`/redeploy
+  sozinho NÃO os removeria de lá. Por isso `catalog.ts` ganhou
+  `removeDeprecatedSongs()`: roda no boot da API, apaga por id uma lista
+  fixa de arquivos se existirem (idempotente, silencioso se já sumiram).
+  Resolve tanto localmente quanto em produção no próximo redeploy, sem
+  precisar de shell/CLI no volume (que não temos configurado). Pode ser
+  removido do código depois de confirmar (via log `[catalog] removidas N
+  arquivo(s)...`) que sumiu da produção — não é permanente por design.
+
+- **Bug de matching da LRCLIB corrigido (2026-07-16)**: letra da "Cobertor"
+  (Anitta part. Projota) veio toda errada/alucinada do Whisper — investigado
+  a pedido do usuário. Causa: `fix_lyrics.py` buscava na LRCLIB usando o
+  campo `artist` completo como veio do título do YouTube ("Anitta part.
+  Projota"), mas a LRCLIB cadastra só o artista principal ("Anitta") — a
+  busca por texto completo com o token "part" no meio não batia com NADA
+  (confirmado manualmente: query "Anitta Cobertor" → 20 resultados com letra
+  sincronizada; query "Anitta part. Projota Cobertor" → 0). Corrigido:
+  `find_synced` agora também tenta só o primeiro artista (split em
+  "part./feat./ft./,/&//", `primary_artist()`) quando o artista completo não
+  encontra nada. Rodada uma passada completa (`fix_lyrics.py`, sem
+  `--force`) sobre o catálogo inteiro (364 músicas) pra revalidar com a
+  busca corrigida: **resultado medido — ok=8 letras novas encontradas
+  (Cobertor + 8), pulados=276 (já tinham LRCLIB de antes ou são
+  UltraStar/isentas), sem_match=80 (não existe letra sincronizada pra essas
+  na LRCLIB — provavelmente lives/DVDs/covers/remixes obscuros; continuam
+  no Whisper, é o limite real da base comunitária, não um bug)**. Ou seja: o
+  bug de matching por "part./feat." era real mas afetava um subconjunto
+  pequeno do catálogo, não a maioria — a maior parte das letras ruins
+  restantes (os 80 `sem_match`) não tem solução automática disponível hoje.
+  254 músicas têm letra sincronizada da LRCLIB no total agora.
 
 - **Pesquisa feita (não implementada)**: alternativas gratuitas ao Railway
   com mais armazenamento, pro caso do usuário não querer pagar o upgrade.
@@ -243,7 +320,7 @@ Monorepo npm workspaces (sem Turborepo — decisão pragmática; reavaliar se o 
 |---|---|---|
 | `apps/web` | Site institucional (Next.js 16, porta 3000) | **Completo**: Hero, FeaturesBar, Como funciona, Demonstração, Planos, FAQ, Footer |
 | `apps/api` | Backend da Jam — Node + Socket.io, HTTPS 4001 + espelho HTTP 4000 (local) | **Funcional, em produção** (Railway, `https://api.kantai.online`): sessões, fila (com convites de dueto), leaderboard, relay de pitch/WebRTC, skip, catálogo dinâmico (~380 músicas), playcounts, importador YouTube in-app, snapshot em disco. Ver seção 7 pro bloqueio de volume ativo. |
-| `apps/host` | Tela TV — Next.js (porta 3001 local) | **Funcional, em produção** (Vercel, domínio raiz `kantai.online` aponta pra cá — seção 0/7): lobby com código+QR (também durante a música tocando, canto inferior), player com áudio real (ou synth p/ demos) + letra sincronizada, "voz na TV" (receptor + medidor de latência + motor ativo exibido), `TvScaleFrame` (escala uniforme pra Smart TV), pular música, resultado, leaderboard, encerramento |
+| `apps/host` | Tela TV — Next.js (porta 3001 local) | **Funcional, em produção** (Vercel, domínio raiz `kantai.online` aponta pra cá — seção 0/7): lobby com código+QR (também durante a música tocando, canto inferior), player com áudio real + letra sincronizada, "voz na TV" (receptor + medidor de latência + motor ativo exibido), `TvScaleFrame` (híbrido fill/letterbox — seção 0), pular música, resultado, leaderboard, encerramento |
 | `apps/participant` | Mobile-web — Next.js (porta 3002, HTTPS local) | **Funcional, em produção** (Vercel, `https://karaoke-participant.vercel.app`): entrar por código/QR, sessão persistente (localStorage + rejoin), fila com remoção, "sua vez" com mic + score real, toggle "voz na TV" com nível, desistir da música, resultado, ranking |
 | `apps/admin` | Painel admin | **Vazio** — não iniciado |
 | `packages/shared-types` | Contratos: Song, Jam, QueueItem, PitchCurve, ScoreResult, eventos socket | **Completo** — fonte única do protocolo |
@@ -325,25 +402,31 @@ instrumental de outra fonte). `batch_ultrastar_cc.py` importa o repositório ofi
 UltraStar-Deluxe/songs (39 pacotes CC). `batch_local.py [--strip-vocals]` importa pacotes
 locais de `input/ultrastar/` (uma pasta por música: .txt + áudio) — fluxo do usuário para
 estudo pessoal em casa; itens entram marcados como não licenciados para uso comercial.
-**Letras sincronizadas (2026-07-14)**: o pipeline tenta a **LRCLIB** (lrclib.net, letra
-comunitária com timestamp por linha; match artista+título+duração ±4s) antes do Whisper;
-`fix_lyrics.py [--id slug] [--force]` corrige músicas já importadas (backup em
-`lyrics_backup/`, gitignored; UltraStar é pulado — letra por sílaba já é exata; letras são
-obra protegida — uso pessoal, catálogo comercial exige licença ex-Musixmatch).
+**Letras sincronizadas (2026-07-14, matching corrigido em 2026-07-16)**: o pipeline tenta a
+**LRCLIB** (lrclib.net, letra comunitária com timestamp por linha; match artista+título+
+duração ±4s) antes do Whisper; `fix_lyrics.py [--id slug] [--force]` corrige músicas já
+importadas (backup em `lyrics_backup/`, gitignored; UltraStar é pulado — letra por sílaba já
+é exata; letras são obra protegida — uso pessoal, catálogo comercial exige licença
+ex-Musixmatch). **Correção de matching (2026-07-16)**: músicas com artista "A part./feat. B"
+(nomenclatura de título de YouTube) não batiam com o cadastro da LRCLIB (só o artista
+principal) — `find_synced` agora também tenta `primary_artist(artist)` (split em
+part./feat./ft./,/&//) quando o artista completo não acha nada; foi assim que "Cobertor"
+(Anitta part. Projota, letra toda alucinada pelo Whisper antes disso) passou a encontrar a
+letra sincronizada real. Ver seção 0 pro relato completo.
 **`batch_youtube.py <URL|ytsearchN:termos> [--language xx] [--limit N]`** (2026-07-13):
 baixa playlist/vídeo com yt-dlp (MP3 cacheado em `input/youtube/`, ffmpeg do PATH ou do
 pacote `imageio-ffmpeg`) e roda o pipeline IA em cada faixa; título/artista vêm dos
 metadados do vídeo. Mesmo enquadramento do `batch_local.py`: só estudo pessoal (viola ToS
 do YouTube), attribution registra origem e ausência de licença — jamais entra no produto.
-**Catálogo atual: ~340 músicas e crescendo** — 14 Josh Woodward (CC BY 4.0, via
-pipeline Demucs+pyin+Whisper) + 39 UltraStar CC (Jonathan Coulton etc. — **vários são
+**Catálogo atual: ~364 músicas** — 39 UltraStar CC (Jonathan Coulton etc. — **vários são
 CC BY-NC, não comercial**: revisar license.txt de cada pacote antes de qualquer lançamento)
-+ 5 cantigas demo synth + ~280 itens pessoais via `batch_youtube.py` (lote de 373 da
-playlist do usuário quase concluído — ver seção 0; **não licenciadas, uso pessoal**;
-progresso em `input/youtube/processed.txt`). Letras: 127+ com letra sincronizada da
-LRCLIB, resto Whisper (rodar `fix_lyrics.py` de novo após o lote). Gêneros reais via
-iTunes em ~200 (rodar `fix_genres.py` após o lote). Dependências Python:
-`pip install -r services/audio-processing/requirements.txt` (torch CPU já instalado).
++ ~325 itens pessoais via `batch_youtube.py` (lote de 373 da playlist do usuário quase
+concluído — ver seção 0; **não licenciadas, uso pessoal**; progresso em
+`input/youtube/processed.txt`). As 5 cantigas de roda demo (synth) e as 17 músicas do Josh
+Woodward (CC BY 4.0) foram REMOVIDAS em 2026-07-16 a pedido do usuário (ver seção 0) — não
+fazem mais parte do catálogo. Gêneros reais via iTunes em ~200 (rodar `fix_genres.py` após o
+lote). Dependências Python: `pip install -r services/audio-processing/requirements.txt`
+(torch CPU já instalado).
 **Só processar áudio licenciado** — música comercial popular exige catálogo B2B + ECAD
 (Seção 1 do plano); bancos UltraStar comunitários de hits comerciais são transcrições sem
 licença e NÃO devem ser importados em massa no produto.

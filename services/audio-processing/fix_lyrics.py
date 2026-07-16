@@ -47,6 +47,17 @@ DURATION_TOLERANCE_S = 4
 MIN_LINES = 4  # letra sincronizada com menos que isso e lixo/instrumental
 
 LRC_TAG = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\]")
+# "Anitta part. Projota" (nomenclatura de titulo de YouTube) nao bate com o
+# artista principal cadastrado na LRCLIB ("Anitta") - a busca por texto
+# completo nao encontra nada com o token "part" no meio (descoberto ao
+# investigar por que "Cobertor" da Anitta/Projota nao encontrava match apesar
+# de existir letra sincronizada la). Tenta tambem so o primeiro artista.
+COLLAB_SPLIT = re.compile(r"\s+(?:part\.?|feat\.?|ft\.?)\s+|\s*[/,&;]\s*", re.IGNORECASE)
+
+
+def primary_artist(artist: str) -> str:
+    parts = COLLAB_SPLIT.split(artist)
+    return parts[0].strip() if parts and parts[0].strip() else artist
 
 
 def http_get(path: str, params: dict[str, str | int]) -> object | None:
@@ -94,20 +105,23 @@ def find_synced(title: str, artist: str, duration: float) -> str | None:
     """Melhor letra sincronizada da LRCLIB para (titulo, artista, duracao)."""
     q_title = clean_for_query(title)
     q_artist = clean_for_query(artist)
+    q_primary = clean_for_query(primary_artist(artist))
+    # so o artista completo, e so o primeiro (quando diferentes) - a LRCLIB
+    # cadastra o artista principal sozinho, nao "A part. B"/"A feat. B"
+    artist_variants = [q_artist] if q_primary == q_artist else [q_artist, q_primary]
 
     # 1) match exato (a API ja considera a duracao)
-    hit = http_get(
-        "get",
-        {"track_name": q_title, "artist_name": q_artist, "duration": round(duration)},
-    )
-    if isinstance(hit, dict) and hit.get("syncedLyrics"):
-        return hit["syncedLyrics"]
+    for a in artist_variants:
+        hit = http_get(
+            "get", {"track_name": q_title, "artist_name": a, "duration": round(duration)}
+        )
+        if isinstance(hit, dict) and hit.get("syncedLyrics"):
+            return hit["syncedLyrics"]
 
     # 2) busca fuzzy, filtrando por duracao proxima e letra sincronizada
-    for params in (
-        {"track_name": q_title, "artist_name": q_artist},
-        {"q": f"{q_artist} {q_title}"},
-    ):
+    param_attempts = [{"track_name": q_title, "artist_name": a} for a in artist_variants]
+    param_attempts += [{"q": f"{a} {q_title}"} for a in artist_variants]
+    for params in param_attempts:
         results = http_get("search", params)
         if not isinstance(results, list):
             continue
