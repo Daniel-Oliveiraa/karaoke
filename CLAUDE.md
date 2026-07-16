@@ -401,3 +401,90 @@ Fonte completa: `docs/layoutDesc_extracted.txt`. Tokens em `packages/config/tail
   diz qual motor está ativo); sockets reconectados após restart da API perdem role/sala —
   clients refazem attach/rejoin no evento `reconnect`; testes localhost não cobrem
   contexto inseguro — usar `TV_URL=http://<IP>:3001 python scripts/test-tv-mic.py`.
+
+## 7. Deploy em produção (2026-07-14 — imagem Docker validada, `railway up` ainda não feito)
+
+**Arquitetura escolhida**: os 3 apps Next.js (`web`, `host`, `participant`) vão para a
+**Vercel**; a **API** (Socket.io, estado em memória + processos Python) vai para o
+**Railway** — Vercel é serverless (sem conexão persistente/WebSocket, sem disco local
+persistente, sem `child_process` de Python), incompatível com a arquitetura atual da API.
+
+**Decisões do usuário (2026-07-15)**:
+- Catálogo publicado = **o inteiro atual** (~380 músicas, a maioria do lote pessoal do
+  YouTube, **não licenciada para uso comercial** — decisão explícita "por enquanto", para
+  testar o produto; trocar antes de qualquer lançamento real/divulgação pública).
+- Importação ao vivo do YouTube (`catalog:import_youtube`) **continua ativa em produção**
+  — qualquer participante conectado pode disparar um download+Demucs pelo servidor
+  publicado. Risco aceito: abuso/custo de quem descobrir a URL, e a violação de ToS do
+  YouTube fica exposta publicamente (usava ser só o ambiente local do usuário). Sem
+  mitigação implementada ainda (ex.: rate-limit por participante) — considerar se virar
+  problema real.
+
+### Vercel — web/host/participant
+Um projeto Vercel por app, todos apontando pro mesmo repo (`Daniel-Oliveiraa/karaoke`),
+com **Root Directory** diferente:
+| App | Root Directory | Domínio sugerido | Env vars |
+|---|---|---|---|
+| `apps/web` | `apps/web` | `kantai.online` | nenhuma (site institucional, sem socket) |
+| `apps/host` | `apps/host` | `tv.kantai.online` (sugestão) | `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_PARTICIPANT_URL` |
+| `apps/participant` | `apps/participant` | `app.kantai.online` (sugestão) | `NEXT_PUBLIC_API_URL` |
+
+`NEXT_PUBLIC_API_URL`/`NEXT_PUBLIC_PARTICIPANT_URL` apontam para as URLs públicas reais
+(a da API no Railway, e a do participant na própria Vercel) — nada de IP de rede local.
+Vercel detecta o workspace npm automaticamente (instala na raiz do monorepo mesmo com
+Root Directory numa subpasta). **Bônus**: HTTPS de verdade emitido automaticamente —
+acaba com toda a fricção do certificado self-signed local (accept manual no celular) uma
+vez em produção.
+
+### Railway — API (`apps/api`)
+**Por que via `railway up` (CLI, upload direto) em vez de GitHub**: `apps/api/media/`
+(catálogo processado, ~2.1GB) e `apps/api/data/` (snapshot das Jams) estão no
+`.gitignore` — nunca foram enviados ao GitHub. Um deploy via GitHub chegaria com o
+catálogo vazio. `railway up` sobe o diretório local (respeitando só o `.dockerignore`,
+não o `.gitignore`), então esses arquivos vão junto.
+
+**Arquivos preparados**: `Dockerfile` (raiz do repo) + `docker/api-entrypoint.sh` +
+`.dockerignore`. A imagem tem Node 20 + Python3 + ffmpeg (para o Demucs/yt-dlp da
+importação ao vivo). O catálogo/estado atuais são copiados para `/app/seed/` na
+imagem (fora do caminho onde o volume persistente vai montar) — o entrypoint copia
+essa semente para `/data/media` e `/data/state` **só na primeira execução** (volume
+vazio); depois disso o volume já tem dados e novas músicas importadas ao vivo (ou
+mudanças no estado das Jams) sobrevivem a redeploys sem serem sobrescritas.
+
+Variáveis de ambiente lidas pelo código (já implementadas — sem elas, cai nos caminhos
+locais de sempre, então dev local continua funcionando igual):
+- `KANTAI_MEDIA_DIR` (catálogo — `catalog.ts`)
+- `KANTAI_DATA_DIR` (snapshot de Jams + playcounts — `store.ts`/`playcounts.ts`)
+- `PORT` (Railway injeta sozinho; o código já respeita `process.env.PORT`)
+- `HTTP_PORT=0` (desativa o espelho HTTP puro — só existia pra TV sem cert self-signed
+  em dev local; o Railway já entrega HTTPS de verdade, então essa muleta não é
+  necessária em produção)
+- `PYTHON_BIN` (default `"python"` — o Dockerfile já cria o symlink `python→python3`)
+
+**Passos no Railway** (dashboard): criar o serviço a partir do Dockerfile, anexar um
+**volume persistente montado em `/data`**, configurar as env vars acima, e adicionar
+domínio customizado (ex.: `api.kantai.online`) apontando pro serviço.
+
+**Deploy** (CLI, do diretório raiz do repo):
+```bash
+npx @railway/cli login          # abre o navegador pra autenticar
+npx @railway/cli link           # conecta ao projeto criado no dashboard
+npx @railway/cli up             # sobe o diretório local (inclui media/data)
+```
+**Build local validado (2026-07-14)**: `docker build -t kantai-api-test -f Dockerfile .`
+passou completo (contexto de 2.79GB, imagem final ~8.3GB — Node+Python+torch CPU+Demucs+
+catálogo). Corrigido no meio do caminho: sem o `pip3 install torch --index-url .../cpu`
+antes do `requirements.txt`, o resolver do pip puxava a build CUDA/GPU de torch (centenas
+de MB de `cuda-toolkit`/`nvidia-cudnn` inúteis num host CPU-only como o Railway) — com a
+ordem corrigida, o segundo build não baixou nenhum pacote CUDA. Smoke test rodando o
+container localmente (`docker run -p 4099:4001 -e PORT=4001 kantai-api-test`) confirmou:
+entrypoint semeia `/data/media` e `/data/state` a partir de `/app/seed/` na primeira
+execução, API sobe, catálogo carrega (381 músicas), `GET /health` responde `{"ok":true}`.
+**Nota**: a semente também inclui as Jams salvas em `apps/api/data/jams.json` do ambiente
+local (`store.ts` restaurou 40 no smoke test) — como são jams de teste/dev, o primeiro
+boot em produção provavelmente vai "restaurar" sessões antigas irrelevantes; elas somem
+sozinhas (jams >24h são descartadas no boot) mas para um primeiro deploy limpo, considerar
+esvaziar `apps/api/data/jams.json` (ou renomear) antes do `railway up` inicial.
+
+Próximo passo é interativo (requer login/dashboard do usuário): `railway login` →
+`railway link` (projeto criado no dashboard, com volume `/data` já anexado) → `railway up`.

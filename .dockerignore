@@ -1,0 +1,26 @@
+# deps/build (regeneradas dentro da imagem)
+node_modules/
+.next/
+*.tsbuildinfo
+next-env.d.ts
+
+# cache local de download do YouTube (nao precisa ir pra imagem — so o
+# catalogo JA PROCESSADO em apps/api/media importa; isso aqui e so cache)
+services/audio-processing/input/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# certificados locais de dev (Railway usa TLS do proprio edge)
+certs/
+
+# ambiente e editor
+.env*
+.git/
+.DS_Store
+Thumbs.db
+
+# docs pesados (imagens/word), nao precisam estar na imagem da API
+docs/

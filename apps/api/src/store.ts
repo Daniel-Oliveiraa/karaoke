@@ -46,12 +46,12 @@ const jams = new Map<string, JamRecord>();
 const ENDED_TTL_MS = 60 * 60 * 1000; // jams encerradas somem depois de 1h
 const STALE_JAM_MS = 24 * 60 * 60 * 1000; // não restaurar jams com +24h
 
-const DATA_FILE = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "data",
-  "jams.json"
-);
+// KANTAI_DATA_DIR sobrescreve o destino (ex.: volume persistente do
+// Railway em produção); sem a env var, mantém o caminho local de sempre.
+const DATA_DIR =
+  process.env.KANTAI_DATA_DIR ??
+  join(dirname(fileURLToPath(import.meta.url)), "..", "data");
+const DATA_FILE = join(DATA_DIR, "jams.json");
 
 let saveTimer: NodeJS.Timeout | null = null;
 

@@ -253,11 +253,11 @@ export const CATALOG: Song[] = [
  * cada <id>.json em apps/api/media/ é um Song completo com audioUrl
  * apontando para o arquivo instrumental servido em /media.
  */
-export const MEDIA_DIR = join(
-  fileURLToPath(new URL(".", import.meta.url)),
-  "..",
-  "media"
-);
+// KANTAI_MEDIA_DIR sobrescreve o destino (ex.: volume persistente do
+// Railway em produção); sem a env var, mantém o caminho local de sempre.
+export const MEDIA_DIR =
+  process.env.KANTAI_MEDIA_DIR ??
+  join(fileURLToPath(new URL(".", import.meta.url)), "..", "media");
 
 function loadProcessedSongs(): Song[] {
   let entries: string[];

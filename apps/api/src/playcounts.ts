@@ -8,12 +8,12 @@ import { fileURLToPath } from "node:url";
  * Mesmo padrão de snapshot debounced do store.ts.
  */
 
-const DATA_FILE = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "data",
-  "playcounts.json"
-);
+// KANTAI_DATA_DIR sobrescreve o destino (ex.: volume persistente do
+// Railway em produção); sem a env var, mantém o caminho local de sempre.
+const DATA_DIR =
+  process.env.KANTAI_DATA_DIR ??
+  join(dirname(fileURLToPath(import.meta.url)), "..", "data");
+const DATA_FILE = join(DATA_DIR, "playcounts.json");
 
 const counts = new Map<string, number>();
 
