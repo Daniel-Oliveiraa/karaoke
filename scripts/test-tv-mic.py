@@ -123,7 +123,7 @@ def main():
         for participant_id, peer_dbg in dbg2.items():
             if not isinstance(peer_dbg, dict):
                 continue
-            for field in ("oneWayLatencyMs", "lossPct", "reorderCount", "candidateType", "stretch"):
+            for field in ("oneWayLatencyMsExperimental", "lossPct", "reorderCount", "candidateType", "stretch"):
                 if field not in peer_dbg:
                     raise AssertionError(f"campo {field} ausente em __tvmic[{participant_id}]: {peer_dbg}")
             if "relay" in str(peer_dbg.get("candidateType")):

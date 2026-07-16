@@ -393,7 +393,13 @@ interface Peer {
    * relativo importa a partir daqui.
    */
   clockOffsetMs: number | null;
-  /** Latência real celular→TV (suavizada por média móvel), null até calibrar. */
+  /** performance.now() da última (re)calibração — ver CLOCK_RECALIBRATE_MS. */
+  lastCalibrationMs: number | null;
+  /**
+   * Latência celular→TV (suavizada por média móvel) — EXPERIMENTAL, só
+   * diagnóstico (window.__tvmic). Não usada no badge principal: calibrar
+   * dois relógios independentes é frágil, ver updateOneWayLatency.
+   */
   oneWayLatencyMs: number | null;
   /** Último RTT/2 medido via getStats() — usado só pra calibrar o offset acima. */
   lastRttMs: number;
@@ -448,21 +454,40 @@ function trackSequence(peer: Peer, seq: number) {
   }
 }
 
+/** Recalibra o offset entre os dois relógios com essa frequência (ms). */
+const CLOCK_RECALIBRATE_MS = 5000;
+
 /**
  * Atualiza a latência real (celular→TV) a partir do timestamp de captura
  * do pacote. `captureTimeUs` vem do relógio do AudioContext do CELULAR
  * (ver tvMic.ts) — dá ~71min antes de dar wrap (2^32us), sobra pra uma
  * festa; não há rebaseline automático no wrap (raro/aceitável nesse
  * intervalo).
+ *
+ * `performance.now()` (TV) e `AudioContext.currentTime` (celular) são dois
+ * relógios independentes sem nenhuma relação fixa entre si — a calibração
+ * (offset = diferença entre os dois no momento da amostra, assumindo que
+ * ela teve ~RTT/2 de rede) só vale enquanto os dois relógios andarem no
+ * mesmo passo. Calibrar 1x só deixa um erro inicial preso pra sempre (ex.:
+ * a amostra usada pra calibrar chegou atrasada por acaso) — por isso
+ * recalibra a cada CLOCK_RECALIBRATE_MS com o RTT/2 mais recente como nova
+ * âncora, e o resultado nunca sai negativo (latência de rede não existe
+ * negativa — se desse, é sinal de calibração ruim, não de rede rápida
+ * demais).
  */
 function updateOneWayLatency(peer: Peer, captureTimeUs: number) {
   const nowMs = performance.now();
   const captureMs = captureTimeUs / 1000;
-  if (peer.clockOffsetMs === null) {
+  const needsCalibration =
+    peer.clockOffsetMs === null ||
+    peer.lastCalibrationMs === null ||
+    nowMs - peer.lastCalibrationMs > CLOCK_RECALIBRATE_MS;
+  if (needsCalibration) {
     const assumedOneWayMs = peer.lastRttMs > 0 ? peer.lastRttMs / 2 : 2;
     peer.clockOffsetMs = nowMs - captureMs - assumedOneWayMs;
+    peer.lastCalibrationMs = nowMs;
   }
-  const oneWay = nowMs - captureMs - peer.clockOffsetMs;
+  const oneWay = Math.max(0, nowMs - captureMs - peer.clockOffsetMs!);
   peer.oneWayLatencyMs =
     peer.oneWayLatencyMs === null
       ? oneWay
@@ -691,9 +716,13 @@ export function createMicReceiver(
       } catch {
         continue;
       }
-      // rede: prefere a latência real medida por pacote (P1); RTT/2 é só
-      // fallback antes da 1ª calibração (oneWayLatencyMs ainda null)
-      const networkMs = peer.oneWayLatencyMs ?? CAPTURE_MS + rttMs / 2;
+      // rede: RTT/2 medido pelo WebRTC (getStats()) é o valor mostrado —
+      // confiável e sempre não-negativo. `oneWayLatencyMs` (comparação
+      // entre o relógio do celular e o da TV) fica só como diagnóstico em
+      // __tvmic: calibrar dois relógios independentes com poucas amostras
+      // é frágil de mais pra ser o número principal (deu latência negativa
+      // e/ou exagerada em teste real — ver comentário em updateOneWayLatency).
+      const networkMs = CAPTURE_MS + rttMs / 2;
       const received = peer.packets;
       const lossPct =
         received + peer.packetsLost > 0
@@ -732,7 +761,9 @@ export function createMicReceiver(
         outRms: Math.round(peer.workletOutRms * 10000) / 10000,
         started: peer.workletStarted,
         underruns: peer.underruns,
-        oneWayLatencyMs:
+        // EXPERIMENTAL — não confiar de olhos fechados, ver comentário em
+        // updateOneWayLatency (calibração entre relógios independentes)
+        oneWayLatencyMsExperimental:
           peer.oneWayLatencyMs === null ? null : Math.round(peer.oneWayLatencyMs),
         lossPct: Math.round(lossPct * 10) / 10,
         reorderCount: peer.packetsReordered,
@@ -777,6 +808,7 @@ export function createMicReceiver(
       packetsLost: 0,
       packetsReordered: 0,
       clockOffsetMs: null,
+      lastCalibrationMs: null,
       oneWayLatencyMs: null,
       lastRttMs: 0,
       jitterEstimateMs: 0,
