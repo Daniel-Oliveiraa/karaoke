@@ -123,6 +123,16 @@
     descontinuidade da onda, não o silêncio. Custo zero em latência; nos
     dois motores (worklet e ScriptProcessor). Validado com
     `DEBUG_JITTER_MS=30` (underruns tratados, sem crash, sem runaway).
+  - **Resync duro (`RESYNC_EXCESS_MS=80`, adicionado após o teste na TV
+    real marcar ~400ms)**: a suavização de 3% drena backlog a só ~30ms/s —
+    jank de Smart TV acumulava centenas de ms que nunca drenavam. Excesso
+    acima de 80ms sobre o alvo pula o readIdx direto pro alvo (fade-in do
+    declick mascara o salto); atraso de buffer fica LIMITADO a
+    alvo+80ms no pior caso. Contador `resyncs` em `__tvmic` — se
+    incrementa sem parar, a TV não está dando conta (motor/CPU, não rede).
+    Substituiu a trava antiga de 90% do ring (~900ms, inalcançável agora).
+    Efeito medido no próprio teste headless: badge que inflava pra
+    400-1000ms no carregamento passou a estabilizar em ~55-75ms.
   - Motor ativo (`worklet`/`script-processor`) exposto **na própria tela**
     (badge "Voz na TV"), não só no console — Smart TV raramente tem
     devtools acessível.
@@ -162,17 +172,20 @@
   antes só existia na `LobbyView` antes de começar. Deixa quem chega depois
   entrar mesmo com alguém já cantando.
 
-- **Bug de tela distorcida/cortada em Smart TV corrigido**:
-  `apps/host/src/components/TvScaleFrame.tsx` — o app inteiro da TV agora
-  renderiza sempre num quadro fixo de 1920x1080 e aplica um único
-  `transform: scale()` uniforme (nunca estica os eixos de forma diferente)
-  pra caber no viewport real do navegador da TV, que costuma divergir do
-  assumido (causa raiz: `overflow: hidden` no `body` + layout desenhado
-  fixo pra 1920x1080 sem adaptação — Smart TVs embutidas lidam mal com a
-  meta viewport). Mesma técnica usada por apps de streaming de TV
-  (Netflix/YouTube TV). Validado matematicamente via JS no Chrome
-  (escala uniforme, centralizado) — **não validado visualmente numa TV
-  real ainda**.
+- **Tela distorcida/cortada em Smart TV — TvScaleFrame v2 (preencher, não
+  letterbox)**: `apps/host/src/components/TvScaleFrame.tsx` — o app da TV
+  renderiza sempre num quadro fixo de 1920x1080 escalado pro viewport real.
+  A v1 usava escala UNIFORME + barras pretas; **testada na TV real do
+  usuário e rejeitada** (o navegador da TV reporta viewport não-16:9 →
+  sobravam barras laterais, tela "apertada" sem ocupar o painel). v2 escala
+  CADA eixo pra preencher 100% (distorção de poucos % num navegador de TV
+  quase-16:9, contra barras que incomodam de verdade). Também: `position:
+  fixed` + top/left/right/bottom explícitos (sem `inset`/100vh — navegador
+  de TV antigo), re-medição com timeouts 500ms/2.5s (viewport de TV assenta
+  depois do load sem disparar resize). Validado via Playwright em 4
+  viewports (todos preenchem 100%; distorção 0% em 16:9 exato, 8-10% só
+  nos casos sintéticos extremos) — **pendente confirmação visual na TV
+  real do usuário**.
 
 - **Pesquisa feita (não implementada)**: alternativas gratuitas ao Railway
   com mais armazenamento, pro caso do usuário não querer pagar o upgrade.

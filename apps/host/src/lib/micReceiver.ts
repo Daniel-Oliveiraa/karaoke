@@ -123,6 +123,20 @@ const MAX_STRETCH = 0.03;
 const UNDERRUN_DECAY = 0.95;
 const FADE_IN_SAMPLES = 128;
 
+/**
+ * Resync duro (2026-07-16, depois do teste na TV real com ~400ms de atraso):
+ * a suavização de 3% (MAX_STRETCH) drena backlog a só ~30ms por segundo —
+ * se a thread da TV engasga no carregamento (Smart TV é fraca) e acumula
+ * centenas de ms no ring, o estica levaria dezenas de segundos pra voltar,
+ * e com jank crônico nunca volta. Acima deste excesso sobre o alvo, pula o
+ * readIdx direto pro alvo: o atraso de buffer fica LIMITADO a
+ * alvo + RESYNC_EXCESS_MS no pior caso, e o fade-in do declick mascara o
+ * salto (é o mesmo caminho anti-estalo). Contado em `resyncs` no __tvmic —
+ * se estiver incrementando o tempo todo, o problema é a TV não dar conta
+ * (aí é buffer/motor, não rede).
+ */
+const RESYNC_EXCESS_MS = 80;
+
 const PLAYER_WORKLET = `
 class PcmPlayer extends AudioWorkletProcessor {
   constructor() {
@@ -141,6 +155,7 @@ class PcmPlayer extends AudioWorkletProcessor {
     this.lastStretchReported = 0;
     this.lastSample = 0; // ultima amostra emitida (cauda do declick)
     this.fadeGain = 0;   // fade-in na retomada (ver UNDERRUN_DECAY/FADE_IN)
+    this.resyncs = 0;    // saltos do resync duro desde o ultimo report
     this.targetMs = ${WORKLET_BUFFER_MS}; // ponto de partida — alvo adaptativo ajusta depois
     this.port.onmessage = (e) => {
       const d = e.data;
@@ -214,14 +229,14 @@ class PcmPlayer extends AudioWorkletProcessor {
     }
     this.lastStretchReported = lastStretch;
 
-    // trava de segurança contra estouro do próprio ring (~1s de
-    // capacidade) — só deveria disparar numa rajada extrema; o caso comum
-    // de buffer alto já é corrigido suavemente acima, sem estalo. O salto
-    // de readIdx é uma descontinuidade — fade-in de novo (anti-estalo).
-    const hardMax = this.ring.length * 0.9;
-    if (this.fill() > hardMax) {
+    // resync duro: backlog acima de RESYNC_EXCESS_MS sobre o alvo (jank
+    // longo da TV) pula direto pro alvo em vez de drenar a 3% — o fade-in
+    // do declick mascara o salto (ver comentário em RESYNC_EXCESS_MS)
+    const excessLimit = target + (${RESYNC_EXCESS_MS} / 1000) * this.srcRate;
+    if (this.fill() > excessLimit) {
       this.readIdx = this.writeIdx - target;
       this.fadeGain = 0;
+      this.resyncs++;
     }
 
     if (currentTime - this.lastReport > 1) {
@@ -233,8 +248,10 @@ class PcmPlayer extends AudioWorkletProcessor {
         outRms: this.sumN ? Math.sqrt(this.sumSq / this.sumN) : 0,
         inRms: this.inN ? Math.sqrt(this.inSumSq / this.inN) : 0,
         stretch: this.lastStretchReported,
+        resyncs: this.resyncs,
       });
       this.underruns = 0;
+      this.resyncs = 0;
       this.sumSq = 0; this.sumN = 0;
       this.inSumSq = 0; this.inN = 0;
     }
@@ -255,6 +272,8 @@ interface PlayerReport {
   inRms: number;
   /** Última correção de taxa aplicada (ver STRETCH_K/MAX_STRETCH). */
   stretch: number;
+  /** Saltos do resync duro no último segundo (ver RESYNC_EXCESS_MS). */
+  resyncs: number;
 }
 
 /** Interface comum dos dois motores de playback de PCM. */
@@ -291,6 +310,8 @@ class ScriptProcessorPlayer implements VoicePlayer {
   private lastSample = 0;
   /** Fade-in na retomada pós-underrun — ver FADE_IN_SAMPLES. */
   private fadeGain = 0;
+  /** Saltos do resync duro desde o último report — ver RESYNC_EXCESS_MS. */
+  private resyncs = 0;
   private targetMs = SCRIPT_PROCESSOR_BUFFER_MS; // ponto de partida — alvo adaptativo ajusta depois
 
   constructor(
@@ -380,12 +401,12 @@ class ScriptProcessorPlayer implements VoicePlayer {
       this.readIdx += ratio;
     }
 
-    // trava de segurança contra estouro do próprio ring — ver comentário
-    // equivalente no PLAYER_WORKLET (salto = descontinuidade, fade-in)
-    const hardMax = this.ring.length * 0.9;
-    if (this.fill() > hardMax) {
+    // resync duro — ver comentário equivalente no PLAYER_WORKLET
+    const excessLimit = target + (RESYNC_EXCESS_MS / 1000) * this.srcRate;
+    if (this.fill() > excessLimit) {
       this.readIdx = this.writeIdx - target;
       this.fadeGain = 0;
+      this.resyncs++;
     }
     this.report();
   }
@@ -400,8 +421,10 @@ class ScriptProcessorPlayer implements VoicePlayer {
       outRms: this.sumN ? Math.sqrt(this.sumSq / this.sumN) : 0,
       inRms: this.inN ? Math.sqrt(this.inSumSq / this.inN) : 0,
       stretch: this.lastStretch,
+      resyncs: this.resyncs,
     });
     this.underruns = 0;
+    this.resyncs = 0;
     this.sumSq = 0;
     this.sumN = 0;
     this.inSumSq = 0;
@@ -430,6 +453,8 @@ interface Peer {
   workletOutRms: number;
   workletStarted: boolean;
   underruns: number;
+  /** Saltos do resync duro acumulados (ver RESYNC_EXCESS_MS). */
+  resyncs: number;
   /** Última correção de taxa aplicada pela suavização (ver STRETCH_K). */
   lastStretch: number;
   // --- medição real por pacote (seq + timestamp de captura, ver tvMic.ts) ---
@@ -695,6 +720,7 @@ export function createMicReceiver(
       peer.workletOutRms = r.outRms;
       peer.workletStarted = r.started;
       peer.underruns += r.underruns;
+      peer.resyncs += r.resyncs;
       peer.lastStretch = r.stretch;
     };
 
@@ -820,6 +846,7 @@ export function createMicReceiver(
         outRms: Math.round(peer.workletOutRms * 10000) / 10000,
         started: peer.workletStarted,
         underruns: peer.underruns,
+        resyncs: peer.resyncs,
         // EXPERIMENTAL — não confiar de olhos fechados, ver comentário em
         // updateOneWayLatency (calibração entre relógios independentes)
         oneWayLatencyMsExperimental:
@@ -862,6 +889,7 @@ export function createMicReceiver(
       workletOutRms: 0,
       workletStarted: false,
       underruns: 0,
+      resyncs: 0,
       lastStretch: 0,
       lastSeq: null,
       packetsLost: 0,
