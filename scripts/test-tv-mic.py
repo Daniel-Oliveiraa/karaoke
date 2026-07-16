@@ -1,16 +1,15 @@
 """
-Teste do prototipo "voz na TV" (v3, track Opus direto): participante liga o
-toggle durante a musica e a TV deve estabelecer a conexao WebRTC (fake mic
-do Chromium), receber o MediaStreamTrack e exibir o medidor de latencia com
-estado conectado. O som fluindo e validado via getStats() (inRms calculado
-de totalAudioEnergy, packets de packetsReceived), exposto em window.__tvmic.
+Teste do prototipo "voz na TV": participante liga o toggle durante a musica
+e a TV deve estabelecer a conexao WebRTC (fake mic do Chromium) e exibir o
+medidor de latencia com estado conectado.
 
 Requer: api (4001), host (3001) e participant (3002) rodando.
 
-Nota: o injetor de jitter sintetico da v2 (DEBUG_JITTER_MS) nao existe mais —
-com track Opus os pacotes saem pelo stack SRTP do navegador e nao ha como
-atrasa-los em JS; a robustez a jitter agora e responsabilidade do NetEq
-(jitter buffer adaptativo do Chrome, com jitterBufferTarget=0 pedido).
+DEBUG_JITTER_MS=25 python scripts/test-tv-mic.py ativa o injetor de jitter
+sintetico do celular (tvMic.ts, gated por localStorage) antes de ligar a voz
+na TV, pra validar a suavizacao do buffer (STRETCH_K/MAX_STRETCH no
+micReceiver.ts) sob rede instavel simulada, em vez de so o caminho de LAN
+ideal (sem jitter real) que o resto do teste cobre.
 """
 import os
 import re
@@ -35,8 +34,7 @@ def main():
 
         tv = browser.new_page(viewport={"width": 1280, "height": 720}, ignore_https_errors=True)
         # TV_URL=http://<IP>:3001 testa o caminho de contexto INSEGURO
-        # (na v3 o playback e o mesmo — MediaStreamAudioSourceNode nao exige
-        # secure context — mas vale validar que nada mais quebrou nesse modo)
+        # (AudioWorklet indisponivel -> fallback ScriptProcessor)
         tv.goto(os.environ.get("TV_URL", "http://localhost:3001"), timeout=90000)
         tv.click("text=Abrir uma Jam nesta tela")
         tv.wait_for_url(re.compile(r"/session/\d{4}"), timeout=30000)
@@ -55,6 +53,13 @@ def main():
 
         phone.wait_for_selector("text=É a sua vez", timeout=20000)
 
+        jitter_ms = int(os.environ.get("DEBUG_JITTER_MS", "0"))
+        if jitter_ms > 0:
+            phone.evaluate(
+                f"localStorage.setItem('kantai-debug-jitter-ms', '{jitter_ms}')"
+            )
+            print(f"jitter sintetico ligado: {jitter_ms}ms")
+
         phone.click("text=Liberar microfone e cantar")
         phone.wait_for_selector("text=Voz na TV desligada", timeout=15000)
         print("ok - cantando, toggle disponivel")
@@ -65,34 +70,35 @@ def main():
         print("ok - toggle ligado no celular")
 
         # TV deve mostrar o medidor com a conexao estabelecida.
-        # Em headless nao ha saida de audio real, entao os numeros oscilam —
-        # amostramos varios segundos e usamos o minimo.
+        # Em headless nao ha saida de audio real, entao o jitter buffer
+        # oscila muito — amostramos varios segundos e usamos o minimo.
         # O numero que importa e o de hardware real; aqui validamos a fiacao.
         tv.wait_for_selector("text=Voz na TV", timeout=20000)
         samples = []
-        rms_samples = []
         for _ in range(8):
             time.sleep(1)
             badge = tv.locator("text=/Voz na TV .*ms/").inner_text()
             m = re.search(r"~(\d+) ms", badge)
             if m:
                 samples.append(int(m.group(1)))
-            # outputRms e um snapshot de ~43ms do analyser do mixer — o mic
-            # fake bipa com silencio no meio, entao amostramos junto com o
-            # badge e usamos o MAXIMO como prova de que a voz esta soando
-            dbg = tv.evaluate("window.__tvmic")
-            if dbg:
-                rms_samples.append(dbg.get("outputRms", 0))
         if not samples:
             raise AssertionError("medidor nunca exibiu latencia")
         best = min(samples)
+        worst = max(samples)
         print(f"ok - medidor ativo (minimo {best}ms em headless; amostras {samples})")
         if best > 2000:
             raise AssertionError(f"latencia implausivel ate para headless: {best}ms")
+        # com a suavizacao (P2), o atraso nunca deveria crescer sem limite —
+        # mesmo com jitter sintetico injetado o pico observado tem que ficar
+        # numa faixa razoavel (nao e um numero exato, so descarta runaway)
+        if jitter_ms > 0 and worst > 1500:
+            raise AssertionError(
+                f"atraso parece estar crescendo sem controle sob jitter: {samples}"
+            )
 
-        # o som esta de fato fluindo? (pacotes RTP chegando + contexto tocando)
-        # __tvmic e {ctxState, engine, <participantId>: {packets, ...}} — um
-        # bloco por celular conectado (duetos: ate 2)
+        # o som esta de fato fluindo? (pacotes PCM chegando + contexto tocando)
+        # __tvmic e {ctxState, <participantId>: {packets, ...}} — um bloco
+        # por celular conectado (duetos: ate 2)
         def total_packets(dbg):
             if not dbg:
                 return 0
@@ -109,36 +115,32 @@ def main():
         print(f"debug celular: aviso de captura muda visivel = {bool(mute_warn)}")
         if not dbg2 or dbg2.get("ctxState") != "running":
             raise AssertionError(f"AudioContext da TV nao esta tocando: {dbg2}")
-        if dbg2.get("engine") != "opus-track":
-            raise AssertionError(f"motor inesperado (deveria ser opus-track): {dbg2}")
         if total_packets(dbg2) <= total_packets(dbg1):
             raise AssertionError(f"pacotes de voz nao estao fluindo: {dbg1} -> {dbg2}")
 
-        # medicoes reais via getStats + confirmacao de que o audio vai direto
+        # P1 (medicao real) + confirmacao de que o audio vai direto
         # celular<->TV na LAN (nunca via "relay" — nao configuramos TURN)
         for participant_id, peer_dbg in dbg2.items():
             if not isinstance(peer_dbg, dict):
                 continue
-            for field in ("lossPct", "jitterBufferMs", "inRms", "concealedPct", "candidateType"):
+            for field in ("oneWayLatencyMsExperimental", "lossPct", "reorderCount", "candidateType", "stretch"):
                 if field not in peer_dbg:
                     raise AssertionError(f"campo {field} ausente em __tvmic[{participant_id}]: {peer_dbg}")
             if "relay" in str(peer_dbg.get("candidateType")):
                 raise AssertionError(
                     f"conexao passou por relay (deveria ser sempre direto na LAN): {peer_dbg}"
                 )
-        print("ok - campos de medicao presentes e conexao confirmada como direta (sem relay)")
-        # a voz esta de fato SOANDO no mixer da TV? usa o maximo dos
-        # snapshots de outputRms coletados junto com o badge (o mic fake
-        # bipa; snapshots individuais caem no silencio entre bips).
-        # Nota: totalAudioEnergy/audioLevel do inbound-rtp ficam em 0 nesse
-        # caminho (Chrome nao popula) — inRms em __tvmic so tem valor em
-        # hardware real, se tiver; nao serve de assert aqui.
-        peak_rms = max(rms_samples, default=0)
-        if peak_rms <= 0.005:
-            raise AssertionError(
-                f"nenhum sinal no mixer da TV (outputRms max {peak_rms}): {dbg2}"
-            )
-        print(f"ok - track Opus fluindo e voz soando no mixer (outputRms max {peak_rms})")
+        print("ok - campos de P1 presentes e conexao confirmada como direta (sem relay)")
+        # outRms do worklet = RMS emitido ao mixer, MEDIA de 1s inteiro.
+        # (o outputRms do analyser e um snapshot de ~43ms e cai no silencio
+        # entre os bips do mic fake — nao serve de assert)
+        worklet_rms = max(
+            (v.get("outRms", 0) for v in dbg2.values() if isinstance(v, dict)),
+            default=0,
+        )
+        if worklet_rms <= 0.005:
+            raise AssertionError(f"worklet emitindo silencio ao mixer: {dbg2}")
+        print(f"ok - pacotes PCM fluindo e worklet emitindo sinal (rms {worklet_rms})")
 
         tv.screenshot(path=f"{SHOTS}/tvmic_1_tv_meter.png")
         phone.screenshot(path=f"{SHOTS}/tvmic_2_phone_toggle.png")

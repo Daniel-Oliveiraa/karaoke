@@ -127,7 +127,7 @@ export function PlayerView({
               <span className="text-caption text-foreground-muted">
                 (rede {worstMic?.networkMs ?? 0} · buffer{" "}
                 {worstMic?.jitterBufferMs ?? 0} · saída {worstMic?.outputMs ?? 0} ·
-                motor {micEngine ?? "?"})
+                motor {micEngine === "script-processor" ? "fallback" : micEngine ?? "?"})
               </span>
             </>
           )}

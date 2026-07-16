@@ -44,13 +44,20 @@
     manual no dashboard (não há auto-deploy da API a partir do GitHub;
     `apps/api/media`/`apps/api/data` são gitignored e nunca vão pro repo).
 
-- **"Voz na TV" v3 — voltou a ser track Opus, por decisão explícita do
-  usuário (2026-07-16, mais tarde na mesma data da sessão v2 abaixo).**
-  O usuário pediu pra reverter a arquitetura PCM/DataChannel e usar o
-  MediaStreamTrack direto com Opus, espremendo tudo pra latência mínima
-  (meta declarada: 15–35ms — ver expectativa honesta abaixo). O que mudou
-  (`apps/participant/src/lib/tvMic.ts` + `apps/host/src/lib/micReceiver.ts`,
-  reescritos; comentários no código têm os detalhes):
+- **"Voz na TV" v3 — track Opus TESTADO EM PRODUÇÃO E REVERTIDO NO MESMO
+  DIA (2026-07-16). NÃO REFAZER: agora há medição real.** O usuário pediu
+  pra trocar o PCM/DataChannel (v2) por MediaStreamTrack Opus direto,
+  espremendo tudo (frames 10ms, `jitterBufferTarget=0`, `latencyHint: 0`,
+  track direto sem reconstrução — meta declarada: 15–35ms). Implementado,
+  deployado e **medido pelo usuário em hardware real: ~177ms total (rede
+  25 · buffer 104 · saída 48) vs ~70ms da v2** — o NetEq do Chrome segurou
+  ~104ms de jitter buffer MESMO com `jitterBufferTarget = 0` (o alvo é só
+  um pedido; o NetEq adaptativo ignora na prática), contra 14-23ms do ring
+  buffer próprio da v2. **Código revertido pra v2 (commit da v3: c406b48,
+  se um dia precisar do código de referência).** Conclusão definitiva, com
+  dados: pra latência mínima em LAN, PCM cru via DataChannel com buffer
+  próprio GANHA de track Opus — o jitter buffer do WebRTC não é
+  controlável o suficiente. Registro do que a v3 tinha (tudo removido):
   - Celular: `pc.addTransceiver(track, "sendonly")` com o track do mic
     DIRETO (nada de AudioWorklet no caminho do áudio — o AudioContext do
     celular virou só medidor de nível via AnalyserNode). `contentHint =
@@ -72,31 +79,20 @@
     agora exibe `opus-track`. `__tvmic` ganhou `concealedPct` (perda
     audível), `jitterBufferMs`, `rttMs`; perdeu os campos da v2 (seq/
     reorder/stretch — não existem mais).
-  - O que a v3 REMOVEU (não procurar por isso no código): ring buffer
-    próprio + suavização STRETCH_K + alvo adaptativo manual (o NetEq faz
-    esse papel agora), fallback ScriptProcessor da TV (o playback v3 não
-    precisa de AudioWorklet, funciona igual em contexto inseguro), injetor
-    de jitter `kantai-debug-jitter-ms` (impossível atrasar pacotes SRTP em
-    JS), cabeçalho seq/captureTimeUs e a medição experimental de relógio
-    cruzado.
-  - **Expectativa honesta de latência** (não medido em hardware real ainda):
-    a saída de áudio do PC do usuário sozinha já é ~48ms (teto de
-    hardware/SO confirmado na sessão v2, não muda por código). 15–35ms de
-    TOTAL é fisicamente inalcançável nesse hardware; o realista é rede
-    ~10-15ms + NetEq (piso com target 0: ~20-40ms) + saída 48ms. Se o NetEq
-    segurar pouco buffer, deve ficar na casa dos ~80-100ms total — possível
-    ficar PIOR que os ~70ms da v2. **Falta o usuário medir e comparar; se a
-    v2 era melhor, o commit dela está no histórico do git (reverter é
-    trivial).**
-  - Validado: `test-tv-mic.py` verde (conexão direta host/host, ~100
-    pacotes/s, voz soando no mixer via outputRms, teardown limpo);
-    typecheck ok nos dois apps. Teste atualizado pros novos campos.
-  - Nota de infra do dev local: o host devolvia 404 em TODAS as rotas por
-    cache `.next` corrompido — `Remove-Item -Recurse apps/host/.next` e
-    subir de novo resolveu (não era o código).
+  - A previsão feita antes da medição se confirmou: a meta de 15–35ms era
+    fisicamente inalcançável nesse hardware (só a saída de áudio já é
+    ~48ms, teto de SO/hardware), e o risco apontado ("NetEq pode segurar
+    mais buffer que o ring buffer da v2") foi exatamente o que aconteceu.
+  - Nota de infra do dev local descoberta nessa sessão: o host devolvia
+    404 em TODAS as rotas por cache `.next` corrompido —
+    `Remove-Item -Recurse apps/host/.next` e subir de novo resolveu (não
+    era o código). Também: host dev roda em HTTPS agora quando pedido
+    (`npx next dev -p 3001 --experimental-https --experimental-https-key
+    ../../certs/dev.key --experimental-https-cert ../../certs/dev.crt` a
+    partir de `apps/host` — o script `dev` do package.json segue HTTP).
 
-- **"Voz na TV" v2 (SUPERSEDIDA pela v3 acima — histórico) — sessão grande
-  de redução de latência.** Medido no PC do
+- **"Voz na TV" v2 (ATUAL — restaurada após a medição da v3 acima) —
+  sessão grande de redução de latência.** Medido no PC do
   usuário (motor `worklet`, não o fallback): começou em **~100ms** relatado
   → terminou em **~70ms** estável (`rede` 9-21ms real via RTT/2, `buffer`
   14-23ms agora adaptativo, `saída` 48ms — **teto confirmado de
@@ -284,16 +280,16 @@ node scripts/test-persistence.mjs create   # + kill/restart da API + `verify <co
 npx tsx scripts/test-scoring.ts            # algoritmo de score com performances sintéticas
 python scripts/test-jam-flow.py            # fluxo completo em navegador (Playwright, mic fake)
 python scripts/test-real-song.py           # música real: áudio na TV + letra sincronizada + mic
-python scripts/test-tv-mic.py              # voz na TV: conexão, track Opus fluindo (~100 pkt/s), som no mixer
+python scripts/test-tv-mic.py              # voz na TV: conexão, pacotes PCM fluindo, som tocando
 python scripts/test-session-persistence.py # sessão do celular sobrevive a fechar o navegador
 ```
-Última execução: test-tv-mic em 2026-07-16 (verde após a reescrita v3 — conexão direta,
-~100 pacotes Opus/s, voz soando no mixer; o teste foi atualizado junto: não existem mais
-DEBUG_JITTER_MS nem os campos v2 de `__tvmic`); demais em 2026-07-14 — test-protocol com
-44 asserts verdes (duetos com convite pré-fila, playCount, busca/import YouTube),
-test-jam-flow verde, test-import-e2e validou um import real até `catalog:new_song`.
+Última execução: test-tv-mic em 2026-07-16 (verde na v2 restaurada após a reversão da
+v3); demais em 2026-07-14 — test-protocol com 44 asserts verdes (duetos com convite
+pré-fila, playCount, busca/import YouTube), test-jam-flow verde, test-import-e2e validou
+um import real até `catalog:new_song`.
 Score real validado em 07-12 (perfeito=1000, oitava acima=1000, desafinado 3 semitons=242,
-mudo=0); voz na TV v2 validada em hardware real pelo usuário em 07-12 (a v3 AINDA NÃO).
+mudo=0); voz na TV v2 validada em hardware real pelo usuário em 07-12 e de novo em 07-16
+(~70ms, contra ~177ms medidos da v3 Opus — ver seções 0 e 2).
 
 ### Músicas reais (pipeline de ingestão)
 `services/audio-processing/pipeline.py` (ver README do serviço): entrada = gravação original
@@ -357,7 +353,7 @@ licença e NÃO devem ser importados em massa no produto.
   `Jam.lastResults: ScoreResult[]` (ordenado por score desc) substituiu `lastResult` —
   snapshot antigo é migrado no load. TV: um PitchMeter por cantor, resultado lado a lado
   com badge "melhor da música". "Voz na TV" aceita até `MAX_TV_MICS = 2` celulares
-  simultâneos (um peer/track por cantor somados no voiceBus com ganho 0.7; o 3º é ignorado).
+  simultâneos (peers/worklets separados somados no voiceBus com ganho 0.7; o 3º é ignorado).
   Limitações físicas documentadas: crosstalk entre celulares no mesmo ambiente (detector é
   monofônico), feedback com 2 mics abertos e "voz dobrada" por latências diferentes.
 - **Catálogo híbrido**: 5 cantigas demo (grade MIDI hardcoded em `apps/api/src/catalog.ts`,
@@ -419,43 +415,50 @@ licença e NÃO devem ser importados em massa no produto.
 - **Fluxo da TV é autônomo**: countdown de 5s inicia a próxima da fila, resultado fica 8s e volta.
   A TV é "um palco" (sem interação); o controle remoto do anfitrião virá com o dashboard.
 - **Sem auth ainda**: qualquer um cria Jam. Auth entra junto com o dashboard do anfitrião.
-- **"Voz na TV" (v3 — track Opus direto, 2026-07-16, decisão explícita do usuário; ver
-  seção 0 pro relato da troca)**: toggle
+- **"Voz na TV" (v2 — ATUAL, protótipo de 2026-07-12 refinado em 2026-07-16)**: toggle
   experimental no SingView transmite a voz do cantor para a TV (celular como microfone),
   sempre P2P direto na LAN (nunca passa pelo servidor — Socket.io só relaya SDP/ICE;
   sem STUN/TURN configurado, então o ICE só resolve candidatos "host"; confirmado via
   `getStats()`/candidate-pair, exposto em `window.__tvmic.candidateType`). Histórico de
-  arquiteturas: v1 = track Opus default (jitter buffer NetEq com piso alto); v2 = PCM
-  Int16 cru via RTCDataChannel com ring buffer próprio na TV (~70ms medidos, commits no
-  git de 2026-07-16 se precisar reverter); **v3 (ATUAL) = track Opus de novo, mas
-  espremido**: `addTransceiver(track, "sendonly")` no celular (o MediaStreamTrack do mic
-  vai direto, sem AudioWorklet no caminho — o AudioContext do celular é só medidor de
-  nível), frames Opus de 10ms via munge da answer da TV (`tuneOpusSdp`: `a=ptime:10`,
-  `minptime=10;stereo=0;usedtx=0;cbr=1` — é a answer que governa o encoder do celular;
-  helper DUPLICADO nos dois arquivos, manter em sincronia), `contentHint="speech"`,
-  `networkPriority:"high"` best effort. Na TV: `receiver.jitterBufferTarget = 0` (+
-  `playoutDelayHint = 0` legado, reaplicados a cada ciclo de ~1s),
-  `AudioContext({ latencyHint: 0 })`, track entra por `MediaStreamAudioSourceNode` no
-  barramento de voz (ganho por cantor + reverb curto + analyser, preservados) + `<audio>`
-  mudo por peer (bug do Chrome: stream remoto só soa no WebAudio se preso a um elemento
-  de mídia). O jitter buffer agora é o NetEq do Chrome (adaptativo sozinho; com target 0
-  ele opera no mínimo que a rede permitir) — não há mais ring buffer/STRETCH/alvo manual.
-  Badge com números medidos: "buffer" = atraso real do NetEq via `getStats()`
-  (`jitterBufferDelay/jitterBufferEmittedCount`, delta por ciclo), "rede" =
-  `SEND_PATH_MS` (20ms estimados: captura + frame 10ms + lookahead ~5ms do Opus) + RTT/2,
-  "saída" = `outputLatency` real. Motor exibido: `opus-track`. `__tvmic` por peer:
-  `packets/bytes/lossPct/concealedPct/jitterBufferMs/rttMs/candidateType` (+
-  `inRms/audioLevel` que o Chrome não popula nesse caminho — ficam 0, não usar de
-  assert). `latencyHint` do celular segue `"interactive"` (hint agressivo troca o perfil
-  de áudio do mic em alguns aparelhos — mais ruído de fundo; lição da v2). No celular o
-  nível de voz da UI vem de AnalyserNode acumulado (~0.5s) — snapshots curtos disparam
-  falso "Sem sinal de voz". Arquivos:
+  arquiteturas — **as duas alternativas com track Opus JÁ FORAM TESTADAS E PERDERAM,
+  não revisitar**: v1 = track Opus default (piso NetEq ~40-80ms); v3 = track Opus
+  espremido (frames 10ms, `jitterBufferTarget=0`, `latencyHint: 0`, track direto) —
+  **medida em produção em 2026-07-16: ~177ms total (buffer NetEq ~104ms mesmo com
+  target 0)**, revertida no mesmo dia (código de referência no commit c406b48). A v2
+  usa **PCM Int16 cru via RTCDataChannel não-confiável/não-ordenado**, cada pacote com
+  cabeçalho de 8 bytes
+  (`seq` uint32 + `captureTimeUs` uint32) — mede perda/reordenamento reais
+  (`lossPct`/`reorderCount` em `__tvmic`). Playback com ring buffer próprio + resampling
+  linear + **suavização contínua** em vez de corte seco: `STRETCH_K = 0.02`,
+  `MAX_STRETCH = 0.03` (corrige a taxa de reprodução em até 3% pra convergir ao alvo sem
+  estalar, tanto no overrun quanto no underrun). **Alvo de buffer adaptativo** por jitter
+  medido (RFC3550-style): `WORKLET_MIN_TARGET_MS = 4`, `SCRIPT_PROCESSOR_MIN_TARGET_MS = 8`,
+  `MAX_TARGET_MS = 60` (teto duro), `JITTER_TARGET_MULTIPLIER = 1.5`, `TARGET_STEP_MS = 2`
+  (reavaliado a cada ~1s, nunca pula — só desliza). Captura em 1 render quantum
+  (`CHUNKS_PER_PACKET = 1`, ~2.7ms, `CAPTURE_MS = 6` de estimativa fixa do lado do
+  celular). `AudioContext({ latencyHint })`: `"interactive"` no celular (testado `0.01`
+  numérico e revertido — captava mais ruído de fundo, provável troca de perfil de áudio
+  do SO); `0.01` mantido na TV (sem efeito mensurável, também sem efeito colateral).
+  Recalibração de relógio cruzado a cada `CLOCK_RECALIBRATE_MS = 5000`, mas o valor
+  resultante (`oneWayLatencyMsExperimental`) é só diagnóstico — o badge "rede" exibido
+  usa `CAPTURE_MS + RTT/2` (mais confiável; a medição por relógio cruzado já deu valores
+  absurdos/negativos em teste real com poucas amostras). Motor ativo
+  (`worklet`/`script-processor`) exposto na própria tela do host (badge "Voz na TV"), já
+  que Smart TV raramente tem devtools acessível. **Resultado medido no PC do usuário
+  (motor worklet): ~70ms estável** (rede 9-21ms, buffer 14-23ms adaptativo, saída 48ms —
+  este último é teto de hardware/SO, confirmado não mudar com nenhuma configuração de
+  software testada; é o piso do software neste PC — melhorar além disso é ambiente:
+  outra saída de áudio, TV com modo jogo, cabo em vez de Bluetooth). Injetor de jitter
+  sintético via
+  `localStorage.setItem("kantai-debug-jitter-ms", "<ms>")` (gated, nunca ligado em uso
+  normal) usado por `DEBUG_JITTER_MS=<ms> python scripts/test-tv-mic.py` pra validar
+  suavização/alvo adaptativo sob rede instável simulada — **não reproduz jitter de rede
+  real 100%**, só prova que a lógica não quebra. Arquivos:
   `apps/participant/src/lib/tvMic.ts`, `apps/host/src/lib/micReceiver.ts`. **Pendente**:
-  medição de latência em hardware real (a v3 saiu validada só por `test-tv-mic.py` em
-  headless — fiação, pacotes/s e som no mixer; o número final de ms ninguém mediu) e
-  comparação honesta com os ~70ms da v2 — a meta de 15-35ms do usuário é inalcançável no
-  PC dele (só a saída de áudio já é ~48ms, teto de hardware confirmado na v2). Se a v3
-  ficar pior, reverter pro commit da v2 é trivial. Fatores fora do
+  validação numa Smart TV real (só testado no PC do usuário) e numa rede de festa de
+  verdade (só o injetor sintético até agora). Se crepitar numa festa real, a primeira
+  coisa a tentar é subir `JITTER_TARGET_MULTIPLIER` (histórico: já testado em 4, 2.5 e
+  1.5, todos sem estalo no PC do usuário — 4 é o mais conservador). Fatores fora do
   código que dominam a latência residual: caixa Bluetooth (+100–300ms — usar HDMI/cabo),
   "modo jogo" da TV (20–100ms), Wi-Fi 5GHz vs 2.4GHz. Mic dedicado (Fase 4) segue sendo
   o premium.
@@ -480,9 +483,7 @@ licença e NÃO devem ser importados em massa no produto.
   plano/cartão no Railway (~$5/mês) ou migração pra outro provedor (Oracle Cloud
   "Always Free" pesquisado como alternativa viável, mas exige administração manual de
   VM). **Decisão do usuário pendente** — ver seção 7.
-- Validação em hardware real pendente: "voz na TV" v3 (track Opus — NENHUMA medição de
-  latência em hardware real ainda; comparar com os ~70ms da v2 e reverter se piorar),
-  além do que já valia pra v2: numa Smart TV
+- Validação em hardware real pendente: "voz na TV" (latência + qualidade) numa Smart TV
   de verdade e numa rede de festa real (só testado no PC do usuário e com injetor de
   jitter sintético); `TvScaleFrame` (fix de tela distorcida/cortada) só validado
   matematicamente via JS no Chrome, não visualmente numa TV real.
@@ -533,10 +534,10 @@ Fonte completa: `docs/layoutDesc_extracted.txt`. Tokens em `packages/config/tail
     suavização contínua de buffer (sem estalo), alvo adaptativo por jitter medido,
     correção de um bug de medição de latência negativa/absurda. ~100ms → ~70ms estável
     medido no PC do usuário; pendente validação em Smart TV real e festa real (seção 3).
-  - "Voz na TV" v3 (07-16, mesma data, mais tarde — SUBSTITUI a v2): de volta ao track
-    Opus por decisão explícita do usuário, espremido pra latência mínima (frames 10ms,
-    jitterBufferTarget=0, latencyHint 0 na TV, track direto sem reconstrução). Pendente
-    medição em hardware real e comparação com os ~70ms da v2 (seções 0 e 2).
+  - "Voz na TV" v3 (07-16, mesma data, mais tarde — TESTADA E REVERTIDA): track Opus
+    espremido (frames 10ms, jitterBufferTarget=0, latencyHint 0, track direto) medido
+    em produção: ~177ms vs ~70ms da v2 (NetEq segurou ~104ms ignorando o target 0).
+    Revertida pra v2 no mesmo dia; commit de referência da v3: c406b48 (seções 0 e 2).
   - QR code da Jam também visível durante a música tocando (07-16), não só no lobby.
   - Fix de tela distorcida/cortada em Smart TV via `TvScaleFrame` (escala uniforme
     1920x1080, 07-16); pendente validação visual numa TV real (seção 3).
@@ -571,13 +572,14 @@ Fonte completa: `docs/layoutDesc_extracted.txt`. Tokens em `packages/config/tail
   (compartilhar o MediaStream); AudioContext criado sem gesto nasce suspenso (retomar em
   clique + avisar na UI — o aviso precisa aparecer MESMO sem conexão de voz ativa); assets
   de dev do Next 16 bloqueiam acesso cross-origin (`allowedDevOrigins`); getUserMedia exige
-  HTTPS fora de localhost; **AudioWorklet só existe em secure context** — vale pro pitch
-  detector do participant (sempre https, ok); o receptor da TV v3 NÃO depende mais de
-  worklet (MediaStreamAudioSourceNode funciona em contexto inseguro — o fallback
-  ScriptProcessor da v2 foi removido); stream remoto WebRTC só soa no WebAudio se
-  também estiver preso a um `<audio>` mudo (bug antigo do Chrome, hack mantido no
+  HTTPS fora de localhost; **AudioWorklet só existe em secure context** — TV acessando
+  `http://<IP>` cai no fallback ScriptProcessor do micReceiver (+~21ms; `__tvmic.engine`
+  diz qual motor está ativo); stream remoto WebRTC só soa no WebAudio se também estiver
+  preso a um `<audio>` mudo (bug antigo do Chrome — vale pro fallback ontrack do
   micReceiver); `totalAudioEnergy`/`audioLevel` do inbound-rtp ficam 0 no caminho
-  track→WebAudio (não usar de assert — o sinal real se prova pelo analyser do mixer);
+  track→WebAudio (descoberto na v3 — não usar de assert; sinal real se prova pelo
+  analyser do mixer); `receiver.jitterBufferTarget = 0` NÃO força o NetEq a esvaziar
+  (medido: ~104ms de buffer mesmo com target 0 — é pedido, não ordem);
   sockets reconectados após restart da API perdem role/sala —
   clients refazem attach/rejoin no evento `reconnect`; testes localhost não cobrem
   contexto inseguro — usar `TV_URL=http://<IP>:3001 python scripts/test-tv-mic.py`;

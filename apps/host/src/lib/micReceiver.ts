@@ -5,34 +5,17 @@ import { MAX_TV_MICS } from "@kantai/shared-types";
 import { getSocket } from "./socket";
 
 /**
- * Receptor da "voz na TV" v3 — track Opus direto, afinado pra latência
- * mínima (decisão explícita do usuário em 2026-07-16, revertendo a v2 de
- * PCM cru via DataChannel; ver o comentário de topo em
- * apps/participant/src/lib/tvMic.ts pro histórico completo).
+ * Receptor da "voz na TV" v2: recebe PCM cru (Int16) por RTCDataChannel
+ * e toca via AudioWorklet com ring buffer próprio (~30ms) — em vez do
+ * jitter buffer do WebRTC, que tem piso de ~40–80ms.
  *
- * O MediaStreamTrack remoto é recebido DIRETO (sem reconstruir o stream,
- * sem ring buffer próprio): entra num MediaStreamAudioSourceNode e cai no
- * barramento de voz (ganho por cantor + reverb curto), preservado da v2.
- * As alavancas de latência deste lado:
+ * Duetos: até MAX_TV_MICS celulares simultâneos, um peer/worklet por
+ * cantor, mixados por soma no barramento de voz (com ganho reduzido por
+ * peer para não clipar). O 3º celular que ofertar é ignorado.
  *
- * - `receiver.jitterBufferTarget = 0` (+ `playoutDelayHint = 0` legado):
- *   pede ao jitter buffer NetEq do Chrome o menor alvo que ele aceitar.
- *   O NetEq continua adaptativo por baixo (sobe sozinho se a rede piorar,
- *   e volta) — é ele quem faz o papel do alvo adaptativo que a v2
- *   implementava na mão.
- * - Answer com `a=ptime:10` + fmtp (ver tuneOpusSdp): o encoder do CELULAR
- *   obedece à descrição remota dele, que é a answer daqui — é este munge
- *   que liga os frames de 10ms de verdade.
- * - `AudioContext({ latencyHint: 0 })`: pede o menor buffer de saída que o
- *   hardware aguentar (o navegador clampa sozinho; outputMs mostra o real).
- *
- * O badge continua com números MEDIDOS: "buffer" agora é o atraso real do
- * NetEq via getStats() (jitterBufferDelay/jitterBufferEmittedCount, delta
- * por ciclo), "rede" é RTT/2 medido + estimativa fixa do caminho de envio.
- *
- * Duetos: até MAX_TV_MICS celulares simultâneos, um peer por cantor,
- * mixados no barramento (ganho reduzido por peer pra não clipar). O 3º
- * celular que ofertar é ignorado.
+ * O worklet de playback faz resampling linear (taxa do celular → taxa da
+ * TV) e reporta o nível real do buffer, então o medidor mostra números
+ * medidos, não chutados. Reverb curto na voz mascara o atraso residual.
  */
 
 export interface MicStats {
@@ -47,141 +30,475 @@ export interface MicStats {
 }
 
 /**
- * Motor de playback ativo — exposto pra UI porque Smart TVs raramente têm
- * devtools acessível. Na v3 só existe um motor (track Opus direto no
- * WebAudio); o valor confirma na tela que a TV está rodando a versão nova.
+ * Motor de playback ativo — AudioWorklet exige contexto seguro (https ou
+ * localhost); em http://<IP> cai no fallback ScriptProcessor (+~21ms fixos).
+ * Exposto pra UI porque Smart TVs raramente têm devtools acessível — sem
+ * isso não dá pra saber qual motor está rodando numa TV real sem abrir o
+ * console.
  */
-export type MicEngine = "opus-track" | null;
+export type MicEngine = "worklet" | "script-processor" | null;
 
 export interface MicReceiverManager {
   stop: () => void;
 }
 
 /**
- * Caminho de envio do lado do celular, estimativa fixa (não dá pra medir de
- * lá): buffer de captura de hardware (~5ms) + frame Opus de 10ms (ptime
- * negociado na answer) + lookahead do encoder (~5ms). O resto do badge
- * "rede" é RTT/2 medido de verdade via getStats().
+ * Captura no celular: ~1 render quantum de entrada (~3ms) + pacote de
+ * ~2.7ms (1 chunk de 128 amostras — ver tvMic.ts). Reduzido de 16ms
+ * (pacotes de 8ms/3 chunks) — ganho de ~10ms real de latência.
  */
-const SEND_PATH_MS = 20;
+const CAPTURE_MS = 6;
+/**
+ * Alvo do ring buffer na TV — a margem de segurança contra jitter de rede.
+ * Motores diferentes, folgas diferentes:
+ * - AudioWorklet roda numa thread de áudio dedicada (timing preciso) —
+ *   aguenta um alvo mais agressivo. Reduzido de 30 para 20ms (ganho de
+ *   10ms); test-tv-mic.py: 0 underruns.
+ * - ScriptProcessor (fallback de contexto inseguro — é o que a TV usa
+ *   quando acessada por http://<IP>, SEM https) roda na thread principal
+ *   e é mais sensível a jank; já tem +~21ms de latência fixa (buffer de
+ *   1024 amostras). Em 20ms o teste mostrou 1 underrun — mantido nos 30ms
+ *   originais por segurança.
+ * Se a voz engasgar/crepitar em Wi-Fi ruim ou com 2 celulares simultâneos,
+ * suba o valor correspondente de volta; test-tv-mic.py não reproduz
+ * jitter de rede real, então a validação de verdade é no ambiente de festa.
+ */
+const WORKLET_BUFFER_MS = 20;
+const SCRIPT_PROCESSOR_BUFFER_MS = 30;
 
 /**
- * Ajusta a seção de áudio do SDP pra latência mínima do encoder Opus.
- * DUPLICADO em apps/participant/src/lib/tvMic.ts (não há pacote
- * compartilhado de runtime entre os apps) — manter os dois em sincronia.
- * Aplicado na ANSWER antes do setLocalDescription: o encoder do celular
- * obedece ao fmtp/ptime da descrição remota que ELE recebe, que é esta.
+ * Alvo de buffer ADAPTATIVO: os valores acima viram só o ponto de partida.
+ * A cada ~1s (mesmo ciclo do collectStats), o alvo real de cada peer é
+ * recalculado a partir do jitter de chegada medido de verdade (ver
+ * updateJitterEstimate) — em vez de ficar chutando um número fixo e
+ * torcendo pra não crepitar na festa (era assim que os valores acima foram
+ * calibrados até agora). Sempre limitado entre MIN/MAX_TARGET_MS por
+ * motor (garante que a adaptação nunca vira "atraso crescendo sem fim") e
+ * só se move alguns ms por vez (TARGET_STEP_MS) pra não saltar — a
+ * suavização do buffer (STRETCH_K/MAX_STRETCH) já lida bem com o alvo se
+ * movendo aos poucos, mas um salto grande ainda seria perceptível.
  */
-function tuneOpusSdp(sdp: string): string {
-  const rtpmap = sdp.match(/a=rtpmap:(\d+) opus\/48000/i);
-  if (!rtpmap) return sdp;
-  const pt = rtpmap[1];
-  const overrides: Record<string, string> = {
-    minptime: "10", // frames de 10ms (default do Chrome é 20ms)
-    stereo: "0",
-    "sprop-stereo": "0",
-    usedtx: "0", // DTX off: sem transição silêncio→voz atrasando o ataque
-    cbr: "1", // pacing constante = menos jitter gerado pelo próprio encoder
-  };
-  const lines = sdp.split("\r\n");
-  const out: string[] = [];
-  for (const line of lines) {
-    // remove ptime/maxptime pré-existentes pra não duplicar
-    if (line.startsWith("a=ptime:") || line.startsWith("a=maxptime:")) continue;
-    if (line.startsWith(`a=fmtp:${pt} `)) {
-      const kv = new Map<string, string | undefined>(
-        line
-          .slice(`a=fmtp:${pt} `.length)
-          .split(";")
-          .map((p) => {
-            const [k, v] = p.split("=");
-            return [k!.trim(), v] as [string, string | undefined];
-          })
-      );
-      for (const [k, v] of Object.entries(overrides)) kv.set(k, v);
-      out.push(
-        `a=fmtp:${pt} ` +
-          [...kv].map(([k, v]) => (v === undefined ? k : `${k}=${v}`)).join(";")
-      );
-      out.push("a=ptime:10");
-      continue;
+const WORKLET_MIN_TARGET_MS = 4;
+const SCRIPT_PROCESSOR_MIN_TARGET_MS = 8;
+const MAX_TARGET_MS = 60;
+/**
+ * Quantas vezes o jitter medido vira margem de segurança no alvo. Apertado
+ * de 2.5x pra 1.5x a pedido do usuário, sabendo do risco: essa é a margem
+ * MAIS agressiva antes de virar aposta — em rede pior que a testada (ex.:
+ * Wi-Fi de festa cheio de gente), a suavização pode não dar conta e voltar
+ * a engasgar. Se estalar, primeira coisa a fazer é subir isso de volta
+ * (2.5 é o valor anterior validado; 4 era o original mais conservador).
+ */
+const JITTER_TARGET_MULTIPLIER = 1.5;
+/** Passo máximo de ajuste do alvo por ciclo (~1s). */
+const TARGET_STEP_MS = 2;
+
+/**
+ * Suavização do ring buffer: em vez de pular o readIdx na marra (estalo
+ * audível) quando o buffer cresce demais, ou cortar pro silêncio (engasgo)
+ * quando esvazia, os dois motores tocam ligeiramente mais rápido/devagar
+ * (variação de taxa de resampling) até convergir de volta pro alvo —
+ * mesma ideia de jitter buffer de jogos/cloud gaming (Steam Link, NetEq).
+ * `STRETCH_K` controla a agressividade da correção; `MAX_STRETCH` é o teto
+ * (3% ~ imperceptível em voz) que também garante que o atraso nunca cresce
+ * sem limite (a correção está sempre puxando de volta pro alvo). Só resta
+ * um "vazio de verdade" (fill() < 1, nada pra interpolar) como caso
+ * realmente cortado — deve ficar raro com a correção contínua.
+ */
+const STRETCH_K = 0.02;
+const MAX_STRETCH = 0.03;
+
+const PLAYER_WORKLET = `
+class PcmPlayer extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.srcRate = 48000;
+    this.ring = new Float32Array(48000); // 1s
+    this.writeIdx = 0;
+    this.readIdx = 0;   // fracionário (resampling)
+    this.started = false;
+    this.underruns = 0;
+    this.lastReport = 0;
+    this.sumSq = 0;   // energia emitida desde o ultimo report (diagnostico)
+    this.sumN = 0;
+    this.inSumSq = 0; // energia RECEBIDA da rede desde o ultimo report
+    this.inN = 0;
+    this.lastStretchReported = 0;
+    this.targetMs = ${WORKLET_BUFFER_MS}; // ponto de partida — alvo adaptativo ajusta depois
+    this.port.onmessage = (e) => {
+      const d = e.data;
+      if (d && d.type === "config") {
+        this.srcRate = d.sampleRate || 48000;
+        this.ring = new Float32Array(this.srcRate);
+        this.writeIdx = 0;
+        this.readIdx = 0;
+        this.started = false;
+        return;
+      }
+      if (d && d.type === "target") {
+        this.targetMs = d.ms;
+        return;
+      }
+      const pcm = new Int16Array(d);
+      for (let i = 0; i < pcm.length; i++) {
+        const v = pcm[i] / 0x8000;
+        this.ring[this.writeIdx % this.ring.length] = v;
+        this.writeIdx++;
+        this.inSumSq += v * v;
+        this.inN++;
+      }
+    };
+  }
+
+  fill() {
+    return this.writeIdx - Math.floor(this.readIdx);
+  }
+
+  process(_inputs, outputs) {
+    const out = outputs[0][0];
+    if (!out) return true;
+
+    const target = (this.targetMs / 1000) * this.srcRate;
+    const baseRatio = this.srcRate / sampleRate;
+
+    if (!this.started) {
+      if (this.fill() >= target) this.started = true;
+      else { out.fill(0); return true; }
     }
-    out.push(line);
+
+    let lastStretch = 0;
+    for (let i = 0; i < out.length; i++) {
+      if (this.fill() < 1) {
+        // vazio de verdade (nada pra interpolar): silêncio e reencher do zero
+        out.fill(0, i);
+        this.started = false;
+        this.underruns++;
+        break;
+      }
+      const drift = (this.fill() - target) / target;
+      lastStretch = Math.max(-${MAX_STRETCH}, Math.min(${MAX_STRETCH}, drift * ${STRETCH_K}));
+      const ratio = baseRatio * (1 + lastStretch);
+      const idx = Math.floor(this.readIdx);
+      const frac = this.readIdx - idx;
+      const a = this.ring[idx % this.ring.length];
+      const b = this.ring[(idx + 1) % this.ring.length];
+      out[i] = a + (b - a) * frac;
+      this.sumSq += out[i] * out[i];
+      this.sumN++;
+      this.readIdx += ratio;
+    }
+    this.lastStretchReported = lastStretch;
+
+    // trava de segurança contra estouro do próprio ring (~1s de
+    // capacidade) — só deveria disparar numa rajada extrema; o caso comum
+    // de buffer alto já é corrigido suavemente acima, sem estalo
+    const hardMax = this.ring.length * 0.9;
+    if (this.fill() > hardMax) this.readIdx = this.writeIdx - target;
+
+    if (currentTime - this.lastReport > 1) {
+      this.lastReport = currentTime;
+      this.port.postMessage({
+        fillMs: (this.fill() / this.srcRate) * 1000,
+        underruns: this.underruns,
+        started: this.started,
+        outRms: this.sumN ? Math.sqrt(this.sumSq / this.sumN) : 0,
+        inRms: this.inN ? Math.sqrt(this.inSumSq / this.inN) : 0,
+        stretch: this.lastStretchReported,
+      });
+      this.underruns = 0;
+      this.sumSq = 0; this.sumN = 0;
+      this.inSumSq = 0; this.inN = 0;
+    }
+    return true;
   }
-  return out.join("\r\n");
+}
+registerProcessor("kantai-pcm-player", PcmPlayer);
+`;
+
+/** Report periódico (1s) dos motores de playback. */
+interface PlayerReport {
+  fillMs: number;
+  underruns: number;
+  started: boolean;
+  /** RMS emitido ao mixer na média do último segundo. */
+  outRms: number;
+  /** RMS recebido da rede na média do último segundo. */
+  inRms: number;
+  /** Última correção de taxa aplicada (ver STRETCH_K/MAX_STRETCH). */
+  stretch: number;
+}
+
+/** Interface comum dos dois motores de playback de PCM. */
+interface VoicePlayer {
+  postConfig(sampleRate: number): void;
+  postPcm(data: ArrayBuffer): void;
+  /** Ajusta o alvo do ring buffer em tempo real (ver alvo adaptativo). */
+  setTarget(ms: number): void;
+  disconnect(): void;
 }
 
 /**
- * Pede o menor jitter buffer possível ao receiver. `jitterBufferTarget`
- * (ms) é o caminho atual do Chrome; `playoutDelayHint` (segundos) é o
- * antecessor, mantido por compatibilidade. Nenhum dos dois está no
- * lib.dom.d.ts desta versão do TS — shape mínimo local. Reaplicado a cada
- * ciclo de stats (barato, e garante que renegociações não voltem ao default).
+ * Fallback para contextos INSEGUROS (TV acessando http://<IP>): AudioWorklet
+ * só existe em secure context, então a mesma lógica de ring buffer roda na
+ * thread principal via ScriptProcessorNode (deprecated, mas universal).
+ * Custo: +~21ms de latência (buffer de 1024 amostras) e mais sensível a
+ * jank da thread principal.
  */
-function requestMinJitterBuffer(receiver: RTCRtpReceiver) {
-  const r = receiver as unknown as {
-    jitterBufferTarget?: number;
-    playoutDelayHint?: number;
-  };
-  try {
-    r.jitterBufferTarget = 0;
-  } catch {
-    // navegador sem suporte — o NetEq fica no alvo adaptativo default dele
-  }
-  try {
-    r.playoutDelayHint = 0;
-  } catch {
-    // idem
-  }
-}
+class ScriptProcessorPlayer implements VoicePlayer {
+  private node: ScriptProcessorNode;
+  private srcRate = 48000;
+  private ring = new Float32Array(48000);
+  private writeIdx = 0;
+  private readIdx = 0;
+  private started = false;
+  private underruns = 0;
+  private lastReport = 0;
+  private sumSq = 0;
+  private sumN = 0;
+  private inSumSq = 0;
+  private inN = 0;
+  private lastStretch = 0;
+  private targetMs = SCRIPT_PROCESSOR_BUFFER_MS; // ponto de partida — alvo adaptativo ajusta depois
 
-/** Snapshot dos contadores cumulativos do inbound-rtp (pra delta por ciclo). */
-interface InboundSnapshot {
-  jitterBufferDelay: number;
-  jitterBufferEmittedCount: number;
-  totalAudioEnergy: number;
-  totalSamplesDuration: number;
-  concealedSamples: number;
-  totalSamplesReceived: number;
+  constructor(
+    private ctx: AudioContext,
+    dest: AudioNode,
+    private onReport: (r: PlayerReport) => void
+  ) {
+    this.node = ctx.createScriptProcessor(1024, 1, 1);
+    this.node.onaudioprocess = (e) => this.process(e);
+    this.node.connect(dest);
+  }
+
+  setTarget(ms: number): void {
+    this.targetMs = ms;
+  }
+
+  postConfig(sampleRate: number): void {
+    this.srcRate = sampleRate || 48000;
+    this.ring = new Float32Array(this.srcRate);
+    this.writeIdx = 0;
+    this.readIdx = 0;
+    this.started = false;
+  }
+
+  postPcm(data: ArrayBuffer): void {
+    const pcm = new Int16Array(data);
+    for (let i = 0; i < pcm.length; i++) {
+      const v = pcm[i]! / 0x8000;
+      this.ring[this.writeIdx % this.ring.length] = v;
+      this.writeIdx++;
+      this.inSumSq += v * v;
+      this.inN++;
+    }
+  }
+
+  disconnect(): void {
+    this.node.disconnect();
+    this.node.onaudioprocess = null;
+  }
+
+  private fill(): number {
+    return this.writeIdx - Math.floor(this.readIdx);
+  }
+
+  private process(e: AudioProcessingEvent): void {
+    const out = e.outputBuffer.getChannelData(0);
+    const target = (this.targetMs / 1000) * this.srcRate;
+    const baseRatio = this.srcRate / this.ctx.sampleRate;
+
+    if (!this.started) {
+      if (this.fill() >= target) this.started = true;
+      else {
+        out.fill(0);
+        this.report();
+        return;
+      }
+    }
+
+    for (let i = 0; i < out.length; i++) {
+      if (this.fill() < 1) {
+        // vazio de verdade (nada pra interpolar): silêncio e reencher do zero
+        out.fill(0, i);
+        this.started = false;
+        this.underruns++;
+        break;
+      }
+      const drift = (this.fill() - target) / target;
+      this.lastStretch = Math.max(-MAX_STRETCH, Math.min(MAX_STRETCH, drift * STRETCH_K));
+      const ratio = baseRatio * (1 + this.lastStretch);
+      const idx = Math.floor(this.readIdx);
+      const frac = this.readIdx - idx;
+      const a = this.ring[idx % this.ring.length]!;
+      const b = this.ring[(idx + 1) % this.ring.length]!;
+      out[i] = a + (b - a) * frac;
+      this.sumSq += out[i]! * out[i]!;
+      this.sumN++;
+      this.readIdx += ratio;
+    }
+
+    // trava de segurança contra estouro do próprio ring — ver comentário
+    // equivalente no PLAYER_WORKLET
+    const hardMax = this.ring.length * 0.9;
+    if (this.fill() > hardMax) this.readIdx = this.writeIdx - target;
+    this.report();
+  }
+
+  private report(): void {
+    if (this.ctx.currentTime - this.lastReport <= 1) return;
+    this.lastReport = this.ctx.currentTime;
+    this.onReport({
+      fillMs: (this.fill() / this.srcRate) * 1000,
+      underruns: this.underruns,
+      started: this.started,
+      outRms: this.sumN ? Math.sqrt(this.sumSq / this.sumN) : 0,
+      inRms: this.inN ? Math.sqrt(this.inSumSq / this.inN) : 0,
+      stretch: this.lastStretch,
+    });
+    this.underruns = 0;
+    this.sumSq = 0;
+    this.sumN = 0;
+    this.inSumSq = 0;
+    this.inN = 0;
+  }
 }
 
 /** Estado de uma conexão de voz (um celular). */
 interface Peer {
   pc: RTCPeerConnection;
-  /** Receiver do track — onde o jitterBufferTarget=0 é (re)aplicado. */
-  receiver: RTCRtpReceiver | null;
+  /** Motor de playback próprio (ring buffer independente por cantor). */
+  player: VoicePlayer | null;
   /** Ganho individual antes do barramento (reduzido quando há 2 vozes). */
   gain: GainNode | null;
-  /** Fonte WebAudio do track remoto (desconectada no teardown). */
-  source: MediaStreamAudioSourceNode | null;
-  /**
-   * Bug conhecido do Chrome: stream remoto só soa no WebAudio se também
-   * estiver preso a um elemento <audio> (mutado).
-   */
   trackSink: HTMLAudioElement | null;
   remoteReady: boolean;
   // candidatos ICE chegam milissegundos após a oferta, antes de
   // setRemoteDescription terminar — enfileirar até lá (senão:
   // "The remote description was null")
   pendingCandidates: RTCIceCandidateInit[];
-  // --- medições via getStats() (ciclo de ~1s) ---
+  lastFillMs: number;
   packets: number;
   bytes: number;
+  // diagnóstico vindo do worklet (report de 1s)
+  workletInRms: number;
+  workletOutRms: number;
+  workletStarted: boolean;
+  underruns: number;
+  /** Última correção de taxa aplicada pela suavização (ver STRETCH_K). */
+  lastStretch: number;
+  // --- medição real por pacote (seq + timestamp de captura, ver tvMic.ts) ---
+  /** Última seq vista (uint32) — null até o 1º pacote chegar. */
+  lastSeq: number | null;
   packetsLost: number;
-  /** Atraso médio real do NetEq no último ciclo (delta), em ms. */
-  jitterBufferMs: number;
-  /** RMS do áudio decodificado no último ciclo (totalAudioEnergy, delta). */
-  inRms: number;
-  /** % de amostras "inventadas" pelo concealment no último ciclo (perda audível). */
-  concealedPct: number;
+  /** Fora de ordem ou duplicado (seq <= lastSeq). */
+  packetsReordered: number;
+  /**
+   * Offset entre o relógio monotônico do celular (captureTimeUs) e o da TV
+   * (performance.now()), calibrado 1x no primeiro pacote assumindo que a
+   * 1ª amostra tem latência de rede ~= RTT/2 medido. Não usa Date.now()
+   * (relógios de parede podem divergir entre aparelhos) — só o offset
+   * relativo importa a partir daqui.
+   */
+  clockOffsetMs: number | null;
+  /** performance.now() da última (re)calibração — ver CLOCK_RECALIBRATE_MS. */
+  lastCalibrationMs: number | null;
+  /**
+   * Latência celular→TV (suavizada por média móvel) — EXPERIMENTAL, só
+   * diagnóstico (window.__tvmic). Não usada no badge principal: calibrar
+   * dois relógios independentes é frágil, ver updateOneWayLatency.
+   */
+  oneWayLatencyMs: number | null;
+  /** Último RTT/2 medido via getStats() — usado só pra calibrar o offset acima. */
   lastRttMs: number;
   localCandidateType?: string;
   remoteCandidateType?: string;
-  prev: InboundSnapshot | null;
-  /** audioLevel instantâneo do inbound-rtp (nível decodificado, 0..1). */
-  lastAudioLevel: number;
-  lastSamplesReceived: number;
-  lastSamplesDuration: number;
+  // --- alvo de buffer adaptativo (P3) ---
+  /** Estimativa de jitter de chegada (RFC3550-like), em ms. */
+  jitterEstimateMs: number;
+  lastArrivalMs: number | null;
+  lastCaptureUs: number | null;
+  /** Alvo em uso agora (começa no valor fixo do motor, ajusta aos poucos). */
+  currentTargetMs: number;
+}
+
+/**
+ * Estimativa de jitter de chegada (mesma ideia do RFC3550/RTP): compara a
+ * variação no intervalo de CHEGADA dos pacotes com a variação no intervalo
+ * de CAPTURA (do lado do celular) — se a rede fosse perfeita, seriam iguais;
+ * a diferença é jitter de verdade. Média móvel exponencial (janela ~16
+ * amostras) pra não reagir a um pacote isolado fora da curva.
+ */
+function updateJitterEstimate(peer: Peer, captureTimeUs: number) {
+  const nowMs = performance.now();
+  if (peer.lastArrivalMs !== null && peer.lastCaptureUs !== null) {
+    const arrivalDelta = nowMs - peer.lastArrivalMs;
+    const captureDelta = (captureTimeUs - peer.lastCaptureUs) / 1000;
+    const d = Math.abs(arrivalDelta - captureDelta);
+    peer.jitterEstimateMs += (d - peer.jitterEstimateMs) / 16;
+  }
+  peer.lastArrivalMs = nowMs;
+  peer.lastCaptureUs = captureTimeUs;
+}
+
+/**
+ * Rastreia perda/reordenamento via número de sequência (uint32, comparação
+ * segura contra wraparound — mesma técnica de RTP/TCP: trata a diferença
+ * como uint32 e considera "adiantado" se < 2^31).
+ */
+function trackSequence(peer: Peer, seq: number) {
+  if (peer.lastSeq === null) {
+    peer.lastSeq = seq;
+    return;
+  }
+  const diff = (seq - peer.lastSeq) >>> 0;
+  if (diff === 0) {
+    peer.packetsReordered++; // duplicado
+  } else if (diff < 0x80000000) {
+    if (diff > 1) peer.packetsLost += diff - 1; // gap na sequência
+    peer.lastSeq = seq;
+  } else {
+    peer.packetsReordered++; // chegou atrasado, seq "anterior"
+  }
+}
+
+/** Recalibra o offset entre os dois relógios com essa frequência (ms). */
+const CLOCK_RECALIBRATE_MS = 5000;
+
+/**
+ * Atualiza a latência real (celular→TV) a partir do timestamp de captura
+ * do pacote. `captureTimeUs` vem do relógio do AudioContext do CELULAR
+ * (ver tvMic.ts) — dá ~71min antes de dar wrap (2^32us), sobra pra uma
+ * festa; não há rebaseline automático no wrap (raro/aceitável nesse
+ * intervalo).
+ *
+ * `performance.now()` (TV) e `AudioContext.currentTime` (celular) são dois
+ * relógios independentes sem nenhuma relação fixa entre si — a calibração
+ * (offset = diferença entre os dois no momento da amostra, assumindo que
+ * ela teve ~RTT/2 de rede) só vale enquanto os dois relógios andarem no
+ * mesmo passo. Calibrar 1x só deixa um erro inicial preso pra sempre (ex.:
+ * a amostra usada pra calibrar chegou atrasada por acaso) — por isso
+ * recalibra a cada CLOCK_RECALIBRATE_MS com o RTT/2 mais recente como nova
+ * âncora, e o resultado nunca sai negativo (latência de rede não existe
+ * negativa — se desse, é sinal de calibração ruim, não de rede rápida
+ * demais).
+ */
+function updateOneWayLatency(peer: Peer, captureTimeUs: number) {
+  const nowMs = performance.now();
+  const captureMs = captureTimeUs / 1000;
+  const needsCalibration =
+    peer.clockOffsetMs === null ||
+    peer.lastCalibrationMs === null ||
+    nowMs - peer.lastCalibrationMs > CLOCK_RECALIBRATE_MS;
+  if (needsCalibration) {
+    const assumedOneWayMs = peer.lastRttMs > 0 ? peer.lastRttMs / 2 : 2;
+    peer.clockOffsetMs = nowMs - captureMs - assumedOneWayMs;
+    peer.lastCalibrationMs = nowMs;
+  }
+  const oneWay = Math.max(0, nowMs - captureMs - peer.clockOffsetMs!);
+  peer.oneWayLatencyMs =
+    peer.oneWayLatencyMs === null
+      ? oneWay
+      : peer.oneWayLatencyMs * 0.9 + oneWay * 0.1;
 }
 
 export function createMicReceiver(
@@ -203,6 +520,7 @@ export function createMicReceiver(
   let ctx: AudioContext | null = null;
   let voiceBus: GainNode | null = null;
   let analyser: AnalyserNode | null = null;
+  let workletReady: Promise<void> | null = null;
   let statsTimer: ReturnType<typeof setInterval> | null = null;
   let engine: MicEngine = null;
 
@@ -219,7 +537,7 @@ export function createMicReceiver(
     if (!peer) return;
     peers.delete(participantId);
     peer.pc.close();
-    peer.source?.disconnect();
+    peer.player?.disconnect();
     peer.gain?.disconnect();
     peer.trackSink?.remove();
     rebalanceGains();
@@ -236,66 +554,124 @@ export function createMicReceiver(
     ctx = null;
     voiceBus = null;
     analyser = null;
+    workletReady = null;
     engine = null;
     onStats(new Map(), false, null);
   }
 
   /** Contexto + barramento de voz (dry + reverb) compartilhados, 1x. */
-  function ensureAudio(): void {
-    if (ctx) return;
-    // latencyHint: 0 — pede explicitamente o MENOR buffer de saída
-    // possível; o navegador clampa sozinho ao que o hardware aguenta
-    // (ver outputMs no MicStats pro valor real escolhido). No PC do
-    // usuário a saída já estava no teto de hardware (~48ms) com 0.01;
-    // 0 é o pedido mais agressivo que a API aceita.
-    ctx = new AudioContext({ latencyHint: 0 });
-    // Política de autoplay: se a página da TV foi carregada sem nenhum
-    // clique, o contexto nasce suspenso (mudo). Tenta retomar já, e de
-    // novo a cada gesto até conseguir; o estado vai no MicStats para a
-    // UI avisar.
-    if (ctx.state === "suspended") {
-      void ctx.resume();
-      const resume = () => {
-        if (ctx?.state === "suspended") void ctx.resume();
-      };
-      document.addEventListener("click", resume);
-      document.addEventListener("keydown", resume);
+  async function ensureAudio(): Promise<void> {
+    if (!ctx) {
+      // latencyHint numérico (em vez do preset "interactive") pede um
+      // buffer de saída menor explicitamente — "interactive" já é o preset
+      // mais agressivo, mas alguns navegadores/dispositivos aceitam um
+      // alvo ainda menor se pedido como número. O navegador ainda limita
+      // ao que o hardware aguenta sem estourar; ver outputMs no MicStats
+      // pra saber o valor real que ele escolheu.
+      ctx = new AudioContext({ latencyHint: 0.01 });
+      // Política de autoplay: se a página da TV foi carregada sem nenhum
+      // clique, o contexto nasce suspenso (mudo). Tenta retomar já, e de
+      // novo a cada gesto até conseguir; o estado vai no MicStats para a
+      // UI avisar.
+      if (ctx.state === "suspended") {
+        void ctx.resume();
+        const resume = () => {
+          if (ctx?.state === "suspended") void ctx.resume();
+        };
+        document.addEventListener("click", resume);
+        document.addEventListener("keydown", resume);
+      }
+      // qualquer transição suspended↔running atualiza a UI na hora
+      ctx.onstatechange = () => void collectStats();
+
+      voiceBus = ctx.createGain();
+      voiceBus.gain.value = 1;
+
+      // medidor de sinal real (diagnóstico em __tvmic.outputRms): prova que
+      // áudio decodificado está chegando ao mixer, não só pacotes na rede
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      voiceBus.connect(analyser);
+
+      // voz direta
+      const dry = ctx.createGain();
+      dry.gain.value = 0.85;
+      voiceBus.connect(dry).connect(ctx.destination);
+
+      // reverb curto (delay com feedback filtrado) — mascara a latência
+      const delay = ctx.createDelay(0.5);
+      delay.delayTime.value = 0.09;
+      const feedback = ctx.createGain();
+      feedback.gain.value = 0.32;
+      const damp = ctx.createBiquadFilter();
+      damp.type = "lowpass";
+      damp.frequency.value = 3200;
+      const wet = ctx.createGain();
+      wet.gain.value = 0.3;
+      voiceBus.connect(delay);
+      delay.connect(damp).connect(feedback).connect(delay);
+      delay.connect(wet).connect(ctx.destination);
+
+      // AudioWorklet só existe em SECURE CONTEXT (https ou localhost).
+      // TV acessando http://<IP> cai no fallback de ScriptProcessor.
+      if (ctx.audioWorklet) {
+        engine = "worklet";
+        workletReady = ctx.audioWorklet.addModule(
+          URL.createObjectURL(
+            new Blob([PLAYER_WORKLET], { type: "application/javascript" })
+          )
+        );
+      } else {
+        engine = "script-processor";
+        workletReady = Promise.resolve();
+        console.warn(
+          "[tvmic] AudioWorklet indisponível (página em contexto inseguro?) — usando fallback ScriptProcessor (+~21ms)"
+        );
+      }
+      // avisa a UI já — se nasceu suspenso, o aviso "clique na tela"
+      // precisa aparecer antes mesmo de a conexão completar
+      void collectStats();
     }
-    // qualquer transição suspended↔running atualiza a UI na hora
-    ctx.onstatechange = () => void collectStats();
+    await workletReady;
+  }
 
-    voiceBus = ctx.createGain();
-    voiceBus.gain.value = 1;
+  /** Motor de playback + ganho individual do cantor, no barramento. */
+  async function createPlayer(peer: Peer): Promise<VoicePlayer> {
+    await ensureAudio();
+    const gain = ctx!.createGain();
+    gain.connect(voiceBus!);
+    peer.gain = gain;
+    rebalanceGains();
 
-    // medidor de sinal real (diagnóstico em __tvmic.outputRms): prova que
-    // áudio decodificado está chegando ao mixer, não só pacotes na rede
-    analyser = ctx.createAnalyser();
-    analyser.fftSize = 2048;
-    voiceBus.connect(analyser);
+    const onReport = (r: PlayerReport) => {
+      peer.lastFillMs = r.fillMs;
+      peer.workletInRms = r.inRms;
+      peer.workletOutRms = r.outRms;
+      peer.workletStarted = r.started;
+      peer.underruns += r.underruns;
+      peer.lastStretch = r.stretch;
+    };
 
-    // voz direta
-    const dry = ctx.createGain();
-    dry.gain.value = 0.85;
-    voiceBus.connect(dry).connect(ctx.destination);
+    if (engine === "script-processor") {
+      return new ScriptProcessorPlayer(ctx!, gain, onReport);
+    }
 
-    // reverb curto (delay com feedback filtrado) — mascara a latência
-    const delay = ctx.createDelay(0.5);
-    delay.delayTime.value = 0.09;
-    const feedback = ctx.createGain();
-    feedback.gain.value = 0.32;
-    const damp = ctx.createBiquadFilter();
-    damp.type = "lowpass";
-    damp.frequency.value = 3200;
-    const wet = ctx.createGain();
-    wet.gain.value = 0.3;
-    voiceBus.connect(delay);
-    delay.connect(damp).connect(feedback).connect(delay);
-    delay.connect(wet).connect(ctx.destination);
-
-    engine = "opus-track";
-    // avisa a UI já — se nasceu suspenso, o aviso "clique na tela"
-    // precisa aparecer antes mesmo de a conexão completar
-    void collectStats();
+    const node = new AudioWorkletNode(ctx!, "kantai-pcm-player", {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+    });
+    node.port.onmessage = (e) => {
+      if (typeof e.data?.fillMs === "number") onReport(e.data as PlayerReport);
+    };
+    node.connect(gain);
+    return {
+      postConfig: (sampleRate) =>
+        node.port.postMessage({ type: "config", sampleRate }),
+      postPcm: (data) => node.port.postMessage(data, [data]),
+      setTarget: (ms) => node.port.postMessage({ type: "target", ms }),
+      disconnect: () => node.disconnect(),
+    };
   }
 
   async function collectStats() {
@@ -321,38 +697,13 @@ export function createMicReceiver(
     };
     for (const [participantId, peer] of peers) {
       const connected = peer.pc.connectionState === "connected";
-      // renegociação/reset não pode devolver o NetEq ao alvo default —
-      // reafirma o pedido de buffer mínimo a cada ciclo (é só um setter)
-      if (peer.receiver) requestMinJitterBuffer(peer.receiver);
       let rttMs = 0;
       try {
         const stats = await peer.pc.getStats();
         let pairReport: RTCIceCandidatePairStats | null = null;
-        // shape mínimo local: os campos de áudio do inbound-rtp não estão
-        // todos no lib.dom.d.ts desta versão do TS
-        type InboundAudio = {
-          kind?: string;
-          packetsReceived?: number;
-          packetsLost?: number;
-          bytesReceived?: number;
-          jitterBufferDelay?: number;
-          jitterBufferEmittedCount?: number;
-          totalAudioEnergy?: number;
-          totalSamplesDuration?: number;
-          concealedSamples?: number;
-          totalSamplesReceived?: number;
-          audioLevel?: number;
-        };
-        let inbound: InboundAudio | null = null;
         stats.forEach((report) => {
           if (report.type === "candidate-pair" && report.state === "succeeded") {
             pairReport = report as RTCIceCandidatePairStats;
-          }
-          if (
-            report.type === "inbound-rtp" &&
-            (report as InboundAudio).kind === "audio"
-          ) {
-            inbound = report as InboundAudio;
           }
         });
         if (pairReport) {
@@ -375,69 +726,41 @@ export function createMicReceiver(
           peer.localCandidateType = localCand?.candidateType;
           peer.remoteCandidateType = remoteCand?.candidateType;
         }
-        if (inbound) {
-          const inb = inbound as InboundAudio;
-          peer.packets = inb.packetsReceived ?? peer.packets;
-          peer.bytes = inb.bytesReceived ?? peer.bytes;
-          peer.packetsLost = inb.packetsLost ?? peer.packetsLost;
-          const snap: InboundSnapshot = {
-            jitterBufferDelay: inb.jitterBufferDelay ?? 0,
-            jitterBufferEmittedCount: inb.jitterBufferEmittedCount ?? 0,
-            totalAudioEnergy: inb.totalAudioEnergy ?? 0,
-            totalSamplesDuration: inb.totalSamplesDuration ?? 0,
-            concealedSamples: inb.concealedSamples ?? 0,
-            totalSamplesReceived: inb.totalSamplesReceived ?? 0,
-          };
-          const prev = peer.prev;
-          // atraso médio do NetEq no ÚLTIMO ciclo (delta dos cumulativos) —
-          // é o número honesto do buffer: reflete o que o jitterBufferTarget=0
-          // conseguiu de verdade, não o que pedimos
-          const dEmitted =
-            snap.jitterBufferEmittedCount - (prev?.jitterBufferEmittedCount ?? 0);
-          if (prev && dEmitted > 0) {
-            peer.jitterBufferMs =
-              ((snap.jitterBufferDelay - prev.jitterBufferDelay) / dEmitted) * 1000;
-          } else if (!prev && snap.jitterBufferEmittedCount > 0) {
-            peer.jitterBufferMs =
-              (snap.jitterBufferDelay / snap.jitterBufferEmittedCount) * 1000;
-          }
-          const dDuration =
-            snap.totalSamplesDuration - (prev?.totalSamplesDuration ?? 0);
-          if (dDuration > 0) {
-            peer.inRms = Math.sqrt(
-              Math.max(
-                0,
-                (snap.totalAudioEnergy - (prev?.totalAudioEnergy ?? 0)) / dDuration
-              )
-            );
-          }
-          const dReceived =
-            snap.totalSamplesReceived - (prev?.totalSamplesReceived ?? 0);
-          if (dReceived > 0) {
-            peer.concealedPct =
-              ((snap.concealedSamples - (prev?.concealedSamples ?? 0)) /
-                dReceived) *
-              100;
-          }
-          peer.prev = snap;
-          peer.lastAudioLevel = inb.audioLevel ?? 0;
-          peer.lastSamplesReceived = snap.totalSamplesReceived;
-          peer.lastSamplesDuration = snap.totalSamplesDuration;
-        }
       } catch {
         continue;
       }
-      const networkMs = SEND_PATH_MS + rttMs / 2;
+      // rede: RTT/2 medido pelo WebRTC (getStats()) é o valor mostrado —
+      // confiável e sempre não-negativo. `oneWayLatencyMs` (comparação
+      // entre o relógio do celular e o da TV) fica só como diagnóstico em
+      // __tvmic: calibrar dois relógios independentes com poucas amostras
+      // é frágil de mais pra ser o número principal (deu latência negativa
+      // e/ou exagerada em teste real — ver comentário em updateOneWayLatency).
+      const networkMs = CAPTURE_MS + rttMs / 2;
       const received = peer.packets;
       const lossPct =
         received + peer.packetsLost > 0
           ? (peer.packetsLost / (received + peer.packetsLost)) * 100
           : 0;
 
+      // alvo adaptativo (P3): recalcula a partir do jitter medido, mas só
+      // se move alguns ms por ciclo (TARGET_STEP_MS) pra não saltar
+      const minTarget =
+        engine === "script-processor" ? SCRIPT_PROCESSOR_MIN_TARGET_MS : WORKLET_MIN_TARGET_MS;
+      const desiredTarget = Math.min(
+        MAX_TARGET_MS,
+        Math.max(minTarget, minTarget + JITTER_TARGET_MULTIPLIER * peer.jitterEstimateMs)
+      );
+      const step = Math.max(
+        -TARGET_STEP_MS,
+        Math.min(TARGET_STEP_MS, desiredTarget - peer.currentTargetMs)
+      );
+      peer.currentTargetMs += step;
+      peer.player?.setTarget(peer.currentTargetMs);
+
       all.set(participantId, {
-        totalMs: Math.round(networkMs + peer.jitterBufferMs + outputMs),
+        totalMs: Math.round(networkMs + peer.lastFillMs + outputMs),
         networkMs: Math.round(networkMs),
-        jitterBufferMs: Math.round(peer.jitterBufferMs),
+        jitterBufferMs: Math.round(peer.lastFillMs),
         outputMs: Math.round(outputMs),
         connected,
         audioBlocked,
@@ -445,16 +768,22 @@ export function createMicReceiver(
       diag[participantId] = {
         packets: peer.packets,
         bytes: peer.bytes,
+        fillMs: Math.round(peer.lastFillMs),
         connection: peer.pc.connectionState,
-        jitterBufferMs: Math.round(peer.jitterBufferMs * 10) / 10,
-        inRms: Math.round(peer.inRms * 10000) / 10000,
-        audioLevel: Math.round(peer.lastAudioLevel * 10000) / 10000,
-        samplesReceived: peer.lastSamplesReceived,
-        samplesDuration: Math.round(peer.lastSamplesDuration * 10) / 10,
+        inRms: Math.round(peer.workletInRms * 10000) / 10000,
+        outRms: Math.round(peer.workletOutRms * 10000) / 10000,
+        started: peer.workletStarted,
+        underruns: peer.underruns,
+        // EXPERIMENTAL — não confiar de olhos fechados, ver comentário em
+        // updateOneWayLatency (calibração entre relógios independentes)
+        oneWayLatencyMsExperimental:
+          peer.oneWayLatencyMs === null ? null : Math.round(peer.oneWayLatencyMs),
         lossPct: Math.round(lossPct * 10) / 10,
-        concealedPct: Math.round(peer.concealedPct * 10) / 10,
+        reorderCount: peer.packetsReordered,
         candidateType: `${peer.localCandidateType ?? "?"}/${peer.remoteCandidateType ?? "?"}`,
-        rttMs: Math.round(peer.lastRttMs * 10) / 10,
+        stretch: Math.round(peer.lastStretch * 1000) / 1000,
+        jitterEstimateMs: Math.round(peer.jitterEstimateMs * 10) / 10,
+        currentTargetMs: Math.round(peer.currentTargetMs * 10) / 10,
       };
     }
     // diagnóstico acessível no console da TV: window.__tvmic
@@ -472,37 +801,35 @@ export function createMicReceiver(
       return;
     }
 
-    // barramento pronto ANTES do setRemoteDescription — ontrack dispara
-    // durante a aplicação da oferta e precisa do gain do peer já criado
-    ensureAudio();
-
     const pc = new RTCPeerConnection();
     const peer: Peer = {
       pc,
-      receiver: null,
+      player: null,
       gain: null,
-      source: null,
       trackSink: null,
       remoteReady: false,
       pendingCandidates: [],
+      lastFillMs: WORKLET_BUFFER_MS, // placeholder até o 1º report real chegar
       packets: 0,
       bytes: 0,
+      workletInRms: 0,
+      workletOutRms: 0,
+      workletStarted: false,
+      underruns: 0,
+      lastStretch: 0,
+      lastSeq: null,
       packetsLost: 0,
-      jitterBufferMs: 0,
-      inRms: 0,
-      concealedPct: 0,
+      packetsReordered: 0,
+      clockOffsetMs: null,
+      lastCalibrationMs: null,
+      oneWayLatencyMs: null,
       lastRttMs: 0,
-      prev: null,
-      lastAudioLevel: 0,
-      lastSamplesReceived: 0,
-      lastSamplesDuration: 0,
+      jitterEstimateMs: 0,
+      lastArrivalMs: null,
+      lastCaptureUs: null,
+      currentTargetMs: WORKLET_BUFFER_MS, // corrigido pro motor certo assim que o player existir
     };
     peers.set(participantId, peer);
-
-    const gain = ctx!.createGain();
-    gain.connect(voiceBus!);
-    peer.gain = gain;
-    rebalanceGains();
 
     pc.onicecandidate = (e) => {
       if (e.candidate) {
@@ -512,9 +839,39 @@ export function createMicReceiver(
       }
     };
 
+    pc.ondatachannel = (e) => {
+      const dc = e.channel;
+      dc.binaryType = "arraybuffer";
+      dc.onmessage = (msg) => {
+        if (typeof msg.data === "string") {
+          try {
+            const header = JSON.parse(msg.data) as { type: string; sampleRate: number };
+            if (header.type === "config") peer.player?.postConfig(header.sampleRate);
+          } catch {}
+        } else if (peer.player) {
+          const raw = msg.data as ArrayBuffer;
+          peer.packets += 1;
+          peer.bytes += raw.byteLength;
+          // cabeçalho de 8 bytes (seq uint32 + captureTimeUs uint32, ver
+          // tvMic.ts) prefixando o PCM — extrai a metadata pro medidor real
+          // de latência/perda e repassa só o áudio pro motor de playback.
+          if (raw.byteLength >= 8) {
+            const view = new DataView(raw);
+            const captureTimeUs = view.getUint32(4);
+            trackSequence(peer, view.getUint32(0));
+            updateOneWayLatency(peer, captureTimeUs);
+            updateJitterEstimate(peer, captureTimeUs);
+            peer.player.postPcm(raw.slice(8));
+          } else {
+            peer.player.postPcm(raw);
+          }
+        }
+      };
+    };
+
+    // fallback: celular rodando a versão anterior (track de áudio Opus)
     pc.ontrack = (e) => {
-      peer.receiver = e.receiver;
-      requestMinJitterBuffer(e.receiver);
+      if (!ctx || !voiceBus || !peer.gain) return;
       const stream = e.streams[0] ?? new MediaStream([e.track]);
       // bug conhecido do Chrome: stream remoto só soa no WebAudio se
       // também estiver preso a um elemento <audio> (mutado)
@@ -522,8 +879,7 @@ export function createMicReceiver(
       peer.trackSink.srcObject = stream;
       peer.trackSink.muted = true;
       void peer.trackSink.play().catch(() => undefined);
-      peer.source = ctx!.createMediaStreamSource(stream);
-      peer.source.connect(gain);
+      ctx.createMediaStreamSource(stream).connect(peer.gain);
     };
 
     pc.onconnectionstatechange = () => {
@@ -535,6 +891,8 @@ export function createMicReceiver(
       void collectStats();
     };
 
+    // aplicar a oferta ANTES de qualquer trabalho demorado (carregar o
+    // worklet) — os candidatos do celular chegam logo atrás da oferta
     await pc.setRemoteDescription({ type: "offer", sdp });
     peer.remoteReady = true;
     for (const c of peer.pendingCandidates) {
@@ -542,13 +900,11 @@ export function createMicReceiver(
     }
     peer.pendingCandidates = [];
 
+    peer.player = await createPlayer(peer);
     const answer = await pc.createAnswer();
-    // é AQUI que os frames de 10ms ligam de verdade: o encoder do celular
-    // obedece ao ptime/fmtp da answer que ele recebe (descrição remota dele)
-    const tunedSdp = tuneOpusSdp(answer.sdp ?? "");
-    await pc.setLocalDescription({ type: "answer", sdp: tunedSdp });
+    await pc.setLocalDescription(answer);
     socket.emit("host:mic_signal", participantId, {
-      description: { type: "answer", sdp: tunedSdp },
+      description: { type: "answer", sdp: answer.sdp ?? "" },
     });
 
     if (!statsTimer) statsTimer = setInterval(() => void collectStats(), 1000);
