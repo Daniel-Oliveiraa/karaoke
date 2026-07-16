@@ -4,58 +4,193 @@
 > trabalho exatamente de onde parou, sem depender do histórico de conversa. Sempre que uma
 > decisão nova for tomada com o usuário, ou uma fase for concluída, **atualize este arquivo**.
 
-## 0. Estado ao fim de 2026-07-15 (retomar daqui)
+## 0. Estado ao fim de 2026-07-16 (retomar daqui)
 
-- **Rebrand (2026-07-15): JAMROOM → Kantaí**, domínio `kantai.online`, slogan
-  "Aumenta o som e Kantaí." Pacotes npm `@jamroom/*` → `@kantai/*` (todos os
-  `package.json`, imports `.ts/.tsx`, `tsconfig.json extends`, `next.config.ts
-  transpilePackages`, `tailwind.config.js presets` — `npm install` já rodado para
-  relinkar os symlinks/regenerar o lockfile). Logo com split KAN(branco)/TAÍ(roxo) no
-  lugar de JAM/ROOM (`Navbar.tsx`, `Footer.tsx`). Identificadores internos renomeados
-  em conjunto (client-side, sem afetar dados salvos de produção pois não há usuários
-  reais ainda): localStorage `"jamroom-session"` → `"kantai-session"`, nomes de
-  AudioWorklet `"jamroom-pcm-player"/"jamroom-pcm-sender"/"jamroom-pitch"` →
-  `"kantai-*"` (trocados nos DOIS lados de cada par sender/receiver ao mesmo tempo —
-  ver `apps/host/src/lib/micReceiver.ts`, `apps/participant/src/lib/{tvMic,
-  pitchDetector}.ts`). **Não regenerado**: o certificado dev (`certs/dev.*`) continua
-  com `CN=jamroom-dev` (regenerar invalidaria a confiança já dada pelos celulares —
-  só regerar com `CN=kantai-dev` se for reemitir o cert por outro motivo; o comando
-  documentado na seção 2 já reflete o novo CN para quando isso acontecer).
-- **Git**: mudanças desta sessão (progresso real de import + redesign da LobbyView)
-  prontas para commit — ver seção "Progresso do import" e "LobbyView" abaixo. Commits
-  anteriores do dia: fallback ScriptProcessor da voz na TV, aviso de autoplay, re-attach
-  na reconexão, catálogo v2 (abas + import in-app), convite pré-fila, letras LRCLIB,
-  gêneros iTunes.
-- **Processos que estavam de pé** (morrem se o PC reiniciar; como subir na seção 2):
-  API (`npm run dev:api`, tsx watch, HTTPS 4001 + espelho HTTP 4000), participant
-  (`npm run dev:participant`, dev HTTPS), host em **produção** (`next start -p 3001`,
-  build com env de rede local embutida — ver seção 2), web parado.
-  **Cuidado com processos zombie**: reruns de `tsx watch` ao longo de uma sessão longa
-  deixam supervisores órfãos acumulados (mesma porta, PIDs antigos que não morreram) —
-  se a API não refletir uma mudança de código, confira `Get-CimInstance Win32_Process
-  -Filter "Name='node.exe'"` e mate todos os `tsx.*watch src/index.ts` antes de subir de
-  novo (só um processo deve estar de pé por vez).
-- **Lote do YouTube (373 músicas da playlist do usuário)**: concluído ou muito perto
-  disso (catálogo tinha 384 músicas na última rodada de testes). Checar:
-  `Get-Content services/audio-processing/input/youtube/processed.txt | Measure-Object -Line`;
-  se precisar retomar, `python batch_youtube.py "<URL da playlist>"` (retoma do
-  checkpoint; URL: lista `PLx8_fGInIH4_GoDnJaVuO1P1sXGCOjhVg`). Rodar `fix_lyrics.py` e
-  `fix_genres.py` de novo para as últimas músicas e reiniciar a API.
-- **Pendente de confirmação do usuário**: voz na TV na TV REAL após o fallback
-  ScriptProcessor (causa raiz encontrada: AudioWorklet não existe em `http://<IP>`;
-  corrigido, validado em teste automatizado nos dois contextos, faltou o ok no hardware).
-- **Bug corrigido nesta sessão**: `batch_youtube.py` com o atalho de `processed.txt`
-  aplicado também a pedidos de 1 vídeo só (import sob demanda pelo app) fazia o processo
-  terminar sem nunca imprimir `RESULT slug ok|skip` na 2ª vez que o MESMO vídeo era
-  pedido — a API ficava esperando e fechava o job como "failed" por timeout. Corrigido:
-  o atalho só entra quando há mais de 1 vídeo (só vale a pena/é seguro para playlists
-  grandes); pedido de 1 vídeo sempre passa pelo loop normal, que já sabia reportar
-  "já importada" corretamente.
-- **Limpeza pendente**: música de teste `josh-woodward-josh-woodward-crazy-glue` no
-  catálogo (import e2e com título mal parseado antes do fix da heurística) — apagar
-  `apps/api/media/josh-woodward-josh-woodward-crazy-glue.{json,mp3}` se o usuário quiser.
-- Detalhe operacional dos commits: mensagens de commit com aspas duplas quebram no
-  PowerShell 5.1 — usar `git commit -F <arquivo>` para mensagens longas.
+- **Deploy completo em produção** (Railway + Vercel + DNS Hostinger, todos no
+  ar). Detalhes completos na seção 7. Resumo rápido:
+  - **API** (`apps/api`) → Railway, projeto `elegant-vitality`, serviço
+    `disciplined-laughter` (nomes aleatórios do Railway, não renomeados).
+    URL: `https://api.kantai.online`.
+  - **Host** (`apps/host`) → Vercel, projeto `karaoke-host`. **Decisão do
+    usuário (fase de testes)**: `kantai.online` (domínio raiz) aponta pro
+    HOST, não pro site institucional — abre direto na tela "Abrir uma Jam
+    nesta tela". O projeto `karaoke-web` (site institucional) existe na
+    Vercel mas **sem domínio custom por enquanto** (só a URL
+    `*.vercel.app` gerada); trocar isso é decisão futura de lançamento.
+  - **Participant** (`apps/participant`) → Vercel, projeto
+    `karaoke-participant`, URL `https://karaoke-participant.vercel.app`
+    (sem domínio custom ainda).
+  - **Bloqueio ativo, precisa de ação do usuário**: o volume persistente do
+    Railway (`disciplined-laughter-volume`, `/data`) está **travado em
+    500MB pelo plano trial (sem cartão) e em ~99% cheio** — quebra a
+    importação do YouTube (`ENOSPC`, Demucs morre com SIGKILL) e até o
+    salvamento periódico do snapshot de Jams (`[store] falha ao salvar
+    snapshot: Error: ENOSPC`). **Só resolve com upgrade de plano/cartão no
+    Railway** (o dashboard já mostra o botão "Upgrade to get 5 GB" —
+    tentar redimensionar pelo "Live Resize" sem upgrade NÃO funciona,
+    testado 3x). Catálogo real ficou parcialmente semeado no volume (~79
+    músicas com áudio real das ~380 que existem localmente) — só completa
+    depois do upgrade. Pesquisa de alternativas gratuitas foi feita (ver
+    seção 7) mas nada foi migrado; usuário ainda não decidiu.
+  - **Como esse deploy da API foi feito** (importante pra próxima vez que
+    `apps/api` mudar): **não use `railway up`** — o binário Windows do CLI
+    quebra com panic Rust (`buf.len() <= u32::MAX`) ao empacotar os
+    ~2.1GB de mídia com `--no-gitignore`. Fluxo real: `docker build` local
+    → `docker push` pra `ghcr.io/daniel-oliveiraa/kantai-api:latest`
+    (pacote **público** no GHCR — precisa ser público, senão Railway
+    falha com "unable to connect to registry", já que não configuramos
+    credencial nenhuma) → no dashboard do Railway, Settings → Source →
+    "Connect Image" apontando pra essa tag → e a cada rebuild, "Redeploy"
+    manual no dashboard (não há auto-deploy da API a partir do GitHub;
+    `apps/api/media`/`apps/api/data` são gitignored e nunca vão pro repo).
+
+- **"Voz na TV" v3 — voltou a ser track Opus, por decisão explícita do
+  usuário (2026-07-16, mais tarde na mesma data da sessão v2 abaixo).**
+  O usuário pediu pra reverter a arquitetura PCM/DataChannel e usar o
+  MediaStreamTrack direto com Opus, espremendo tudo pra latência mínima
+  (meta declarada: 15–35ms — ver expectativa honesta abaixo). O que mudou
+  (`apps/participant/src/lib/tvMic.ts` + `apps/host/src/lib/micReceiver.ts`,
+  reescritos; comentários no código têm os detalhes):
+  - Celular: `pc.addTransceiver(track, "sendonly")` com o track do mic
+    DIRETO (nada de AudioWorklet no caminho do áudio — o AudioContext do
+    celular virou só medidor de nível via AnalyserNode). `contentHint =
+    "speech"`, `networkPriority: "high"` (best effort).
+  - SDP da ANSWER da TV munged (`tuneOpusSdp`, duplicada nos dois arquivos):
+    `a=ptime:10` + fmtp `minptime=10;stereo=0;usedtx=0;cbr=1` → frames Opus
+    de 10ms em vez de 20ms. **Confirmado no teste: ~100 pacotes/s** (seria
+    50/s com os 20ms default). É a answer que governa o encoder do celular.
+  - TV: `receiver.jitterBufferTarget = 0` (+ `playoutDelayHint = 0` legado),
+    reaplicado a cada ciclo de stats; `AudioContext({ latencyHint: 0 })`;
+    track entra por `MediaStreamAudioSourceNode` no mesmo barramento de voz
+    de antes (ganho por cantor + reverb + analyser). O hack do `<audio>`
+    mudo continua necessário (bug do Chrome: stream remoto só soa no
+    WebAudio se preso a um elemento de mídia).
+  - Badge continua com números MEDIDOS: "buffer" agora é o atraso real do
+    NetEq via `getStats()` (`jitterBufferDelay/jitterBufferEmittedCount`,
+    delta por ciclo); "rede" = `SEND_PATH_MS` (20ms estimados: captura +
+    frame 10ms + lookahead do encoder) + RTT/2 medido. Motor no badge
+    agora exibe `opus-track`. `__tvmic` ganhou `concealedPct` (perda
+    audível), `jitterBufferMs`, `rttMs`; perdeu os campos da v2 (seq/
+    reorder/stretch — não existem mais).
+  - O que a v3 REMOVEU (não procurar por isso no código): ring buffer
+    próprio + suavização STRETCH_K + alvo adaptativo manual (o NetEq faz
+    esse papel agora), fallback ScriptProcessor da TV (o playback v3 não
+    precisa de AudioWorklet, funciona igual em contexto inseguro), injetor
+    de jitter `kantai-debug-jitter-ms` (impossível atrasar pacotes SRTP em
+    JS), cabeçalho seq/captureTimeUs e a medição experimental de relógio
+    cruzado.
+  - **Expectativa honesta de latência** (não medido em hardware real ainda):
+    a saída de áudio do PC do usuário sozinha já é ~48ms (teto de
+    hardware/SO confirmado na sessão v2, não muda por código). 15–35ms de
+    TOTAL é fisicamente inalcançável nesse hardware; o realista é rede
+    ~10-15ms + NetEq (piso com target 0: ~20-40ms) + saída 48ms. Se o NetEq
+    segurar pouco buffer, deve ficar na casa dos ~80-100ms total — possível
+    ficar PIOR que os ~70ms da v2. **Falta o usuário medir e comparar; se a
+    v2 era melhor, o commit dela está no histórico do git (reverter é
+    trivial).**
+  - Validado: `test-tv-mic.py` verde (conexão direta host/host, ~100
+    pacotes/s, voz soando no mixer via outputRms, teardown limpo);
+    typecheck ok nos dois apps. Teste atualizado pros novos campos.
+  - Nota de infra do dev local: o host devolvia 404 em TODAS as rotas por
+    cache `.next` corrompido — `Remove-Item -Recurse apps/host/.next` e
+    subir de novo resolveu (não era o código).
+
+- **"Voz na TV" v2 (SUPERSEDIDA pela v3 acima — histórico) — sessão grande
+  de redução de latência.** Medido no PC do
+  usuário (motor `worklet`, não o fallback): começou em **~100ms** relatado
+  → terminou em **~70ms** estável (`rede` 9-21ms real via RTT/2, `buffer`
+  14-23ms agora adaptativo, `saída` 48ms — **teto confirmado de
+  hardware/SO do Windows/Chrome, testado e não muda por código**). O que
+  foi implementado (todo em `apps/host/src/lib/micReceiver.ts` +
+  `apps/participant/src/lib/tvMic.ts`, ver comentários no código pros
+  detalhes exatos):
+  - Cabeçalho de 8 bytes por pacote PCM (seq uint32 + captureTimeUs
+    uint32) → mede perda/reordenamento reais e confirma via
+    `getStats()`/candidate-pair que a conexão é **sempre direta**
+    celular↔TV (nunca "relay" — não há STUN/TURN configurado, LAN only
+    por design). Exposto em `window.__tvmic` (`lossPct`, `reorderCount`,
+    `candidateType`).
+  - Suavização do buffer: em vez de pular/cortar seco, corrige a taxa de
+    resampling suavemente (`STRETCH_K=0.02`, `MAX_STRETCH=0.03` = 3%
+    máx) — permite operar com margens de buffer bem mais apertadas sem
+    estalar.
+  - Alvo de buffer **adaptativo** por jitter medido de verdade (não mais
+    fixo): `WORKLET_MIN_TARGET_MS=4`, `SCRIPT_PROCESSOR_MIN_TARGET_MS=8`,
+    `MAX_TARGET_MS=60`, `JITTER_TARGET_MULTIPLIER=1.5` (ajustado
+    4→2.5→1.5 ao longo da sessão, testado a cada redução sem estalar no
+    PC do usuário). **Se voltar a crepitar numa festa de verdade, a
+    primeira coisa a fazer é subir `JITTER_TARGET_MULTIPLIER` de volta**
+    (2.5 já validado antes; 4 é o original conservador).
+  - Motor ativo (`worklet`/`script-processor`) exposto **na própria tela**
+    (badge "Voz na TV"), não só no console — Smart TV raramente tem
+    devtools acessível.
+  - **Bug encontrado e corrigido**: a 1ª tentativa de medir a latência
+    "real" (comparando o relógio do `AudioContext` do celular com
+    `performance.now()` da TV, calibrado por RTT/2 assumido) deu valores
+    absurdos em teste real (`-371ms`, depois `-432ms` mesmo recalibrando a
+    cada 5s) — **calibrar dois relógios independentes com poucas amostras
+    é frágil demais pra ser o número principal exibido**. Revertido: o
+    badge "rede" voltou a usar `CAPTURE_MS + RTT/2` (sempre confiável,
+    nunca negativo). A medição experimental entre relógios continua
+    calculada mas só aparece em `window.__tvmic` como
+    `oneWayLatencyMsExperimental`, não influencia o badge nem os cálculos.
+  - `latencyHint` numérico (`0.01` em vez do preset `"interactive"`)
+    tentado nos dois lados: **não mudou nada do lado da TV** (saída
+    ficou idêntica, confirmando teto de hardware) e teve **efeito
+    colateral ruim do lado do celular** (mic captando mais ruído de
+    fundo — provável troca de perfil de áudio "comunicação" pra "cru" no
+    SO). Revertido no celular (voltou pra `"interactive"`), mantido na TV
+    (sem efeito, mas também sem efeito colateral reportado).
+  - **Decisão tomada, não revisitar**: comprimir o pacote (Opus etc.) foi
+    considerado e descartado — o gargalo não é banda (pacotes de ~256
+    bytes/2.7ms já são ínfimos), e um codec reintroduziria atraso
+    algorítmico (5-20ms+) e possivelmente o piso de jitter buffer do
+    WebRTC (~40-80ms) que a arquitetura PCM cru existe justamente pra
+    evitar.
+  - Injetor de jitter sintético via `localStorage` (`kantai-debug-jitter-ms`,
+    setado pelo `scripts/test-tv-mic.py` via `DEBUG_JITTER_MS=<ms>`) pra
+    validar a suavização/alvo adaptativo sem depender de festa real —
+    **não reproduz condições de rede real 100%**, só prova que a lógica
+    não quebra sob jitter/perda simulados.
+  - **Pendente**: não validado ainda numa Smart TV real (só no PC do
+    usuário) nem numa rede de festa de verdade (só o injetor sintético).
+
+- **QR code da Jam agora aparece também DURANTE a música tocando**
+  (`PlayerView.tsx`, canto inferior esquerdo, com o código por baixo) —
+  antes só existia na `LobbyView` antes de começar. Deixa quem chega depois
+  entrar mesmo com alguém já cantando.
+
+- **Bug de tela distorcida/cortada em Smart TV corrigido**:
+  `apps/host/src/components/TvScaleFrame.tsx` — o app inteiro da TV agora
+  renderiza sempre num quadro fixo de 1920x1080 e aplica um único
+  `transform: scale()` uniforme (nunca estica os eixos de forma diferente)
+  pra caber no viewport real do navegador da TV, que costuma divergir do
+  assumido (causa raiz: `overflow: hidden` no `body` + layout desenhado
+  fixo pra 1920x1080 sem adaptação — Smart TVs embutidas lidam mal com a
+  meta viewport). Mesma técnica usada por apps de streaming de TV
+  (Netflix/YouTube TV). Validado matematicamente via JS no Chrome
+  (escala uniforme, centralizado) — **não validado visualmente numa TV
+  real ainda**.
+
+- **Pesquisa feita (não implementada)**: alternativas gratuitas ao Railway
+  com mais armazenamento, pro caso do usuário não querer pagar o upgrade.
+  Conclusão: **Oracle Cloud "Always Free"** é a única opção realmente
+  grátis-pra-sempre com armazenamento relevante (200GB de block storage +
+  VM real com root, 2 OCPU/12GB RAM em ARM Ampere — reduzido recentemente
+  de 4 OCPU/24GB), mas exige o usuário administrar a VM na mão (sem deploy
+  automático tipo git push; precisa configurar HTTPS/firewall/systemd
+  manualmente — bem mais trabalho que o Railway atual). Fly.io não é mais
+  grátis pra conta nova. Render não suporta disco persistente no tier
+  grátis e hiberna a cada 15min de inatividade. Koyeb não tem mais tier
+  grátis de compute geral. Alternativa mais simples de todas: só pagar o
+  upgrade do próprio Railway (~$5/mês, botão já visível no dashboard).
+  **Usuário ainda não decidiu qual caminho seguir.**
+
+- Commits desta sessão (`git log 4b40696..HEAD`): deploy da API (Docker +
+  env vars), e uma sequência de 6 commits de "Voz na TV" (medição real +
+  buffer suave + fix de tela, correção do bug de latência negativa,
+  latencyHint, dois ajustes de margem de buffer, reversão do latencyHint
+  no celular). Ver mensagens de commit pra detalhe de cada um.
 
 ## 1. O que é o produto
 
@@ -92,9 +227,9 @@ Monorepo npm workspaces (sem Turborepo — decisão pragmática; reavaliar se o 
 | Pasta | Papel | Status |
 |---|---|---|
 | `apps/web` | Site institucional (Next.js 16, porta 3000) | **Completo**: Hero, FeaturesBar, Como funciona, Demonstração, Planos, FAQ, Footer |
-| `apps/api` | Backend da Jam — Node + Socket.io, HTTPS 4001 + espelho HTTP 4000 | **Funcional**: sessões, fila (com convites de dueto), leaderboard, relay de pitch/WebRTC, skip, catálogo dinâmico (~340 músicas e crescendo), playcounts, importador YouTube in-app, snapshot em disco |
-| `apps/host` | Tela TV — Next.js (porta 3001, HTTP) | **Funcional**: lobby com código+QR, player com áudio real (ou synth p/ demos) + letra sincronizada, "voz na TV" (receptor + medidor de latência), pular música, resultado, leaderboard, encerramento |
-| `apps/participant` | Mobile-web — Next.js (porta 3002, HTTPS) | **Funcional**: entrar por código/QR, sessão persistente (localStorage + rejoin), fila com remoção, "sua vez" com mic + score real, toggle "voz na TV" com nível, desistir da música, resultado, ranking |
+| `apps/api` | Backend da Jam — Node + Socket.io, HTTPS 4001 + espelho HTTP 4000 (local) | **Funcional, em produção** (Railway, `https://api.kantai.online`): sessões, fila (com convites de dueto), leaderboard, relay de pitch/WebRTC, skip, catálogo dinâmico (~380 músicas), playcounts, importador YouTube in-app, snapshot em disco. Ver seção 7 pro bloqueio de volume ativo. |
+| `apps/host` | Tela TV — Next.js (porta 3001 local) | **Funcional, em produção** (Vercel, domínio raiz `kantai.online` aponta pra cá — seção 0/7): lobby com código+QR (também durante a música tocando, canto inferior), player com áudio real (ou synth p/ demos) + letra sincronizada, "voz na TV" (receptor + medidor de latência + motor ativo exibido), `TvScaleFrame` (escala uniforme pra Smart TV), pular música, resultado, leaderboard, encerramento |
+| `apps/participant` | Mobile-web — Next.js (porta 3002, HTTPS local) | **Funcional, em produção** (Vercel, `https://karaoke-participant.vercel.app`): entrar por código/QR, sessão persistente (localStorage + rejoin), fila com remoção, "sua vez" com mic + score real, toggle "voz na TV" com nível, desistir da música, resultado, ranking |
 | `apps/admin` | Painel admin | **Vazio** — não iniciado |
 | `packages/shared-types` | Contratos: Song, Jam, QueueItem, PitchCurve, ScoreResult, eventos socket | **Completo** — fonte única do protocolo |
 | `packages/ui` | `@kantai/ui`: Button, Card, Badge, Avatar, PitchMeter, ProgressBar, cn | **Base pronta** — faltam Input, Modal, Toast, Table etc. |
@@ -149,15 +284,16 @@ node scripts/test-persistence.mjs create   # + kill/restart da API + `verify <co
 npx tsx scripts/test-scoring.ts            # algoritmo de score com performances sintéticas
 python scripts/test-jam-flow.py            # fluxo completo em navegador (Playwright, mic fake)
 python scripts/test-real-song.py           # música real: áudio na TV + letra sincronizada + mic
-python scripts/test-tv-mic.py              # voz na TV: conexão, pacotes PCM fluindo, som tocando
+python scripts/test-tv-mic.py              # voz na TV: conexão, track Opus fluindo (~100 pkt/s), som no mixer
 python scripts/test-session-persistence.py # sessão do celular sobrevive a fechar o navegador
 ```
-Última execução: 2026-07-14 — test-protocol com 44 asserts verdes (duetos com convite
-pré-fila, playCount, busca/import YouTube), test-jam-flow verde, test-import-e2e validou
-um import real até `catalog:new_song`, test-tv-mic verde nos DOIS contextos
-(worklet via localhost e fallback ScriptProcessor via `TV_URL=http://<IP>:3001`).
+Última execução: test-tv-mic em 2026-07-16 (verde após a reescrita v3 — conexão direta,
+~100 pacotes Opus/s, voz soando no mixer; o teste foi atualizado junto: não existem mais
+DEBUG_JITTER_MS nem os campos v2 de `__tvmic`); demais em 2026-07-14 — test-protocol com
+44 asserts verdes (duetos com convite pré-fila, playCount, busca/import YouTube),
+test-jam-flow verde, test-import-e2e validou um import real até `catalog:new_song`.
 Score real validado em 07-12 (perfeito=1000, oitava acima=1000, desafinado 3 semitons=242,
-mudo=0); voz na TV v2 validada em hardware real pelo usuário em 07-12.
+mudo=0); voz na TV v2 validada em hardware real pelo usuário em 07-12 (a v3 AINDA NÃO).
 
 ### Músicas reais (pipeline de ingestão)
 `services/audio-processing/pipeline.py` (ver README do serviço): entrada = gravação original
@@ -221,7 +357,7 @@ licença e NÃO devem ser importados em massa no produto.
   `Jam.lastResults: ScoreResult[]` (ordenado por score desc) substituiu `lastResult` —
   snapshot antigo é migrado no load. TV: um PitchMeter por cantor, resultado lado a lado
   com badge "melhor da música". "Voz na TV" aceita até `MAX_TV_MICS = 2` celulares
-  simultâneos (peers/worklets separados somados no voiceBus com ganho 0.7; o 3º é ignorado).
+  simultâneos (um peer/track por cantor somados no voiceBus com ganho 0.7; o 3º é ignorado).
   Limitações físicas documentadas: crosstalk entre celulares no mesmo ambiente (detector é
   monofônico), feedback com 2 mics abertos e "voz dobrada" por latências diferentes.
 - **Catálogo híbrido**: 5 cantigas demo (grade MIDI hardcoded em `apps/api/src/catalog.ts`,
@@ -283,32 +419,46 @@ licença e NÃO devem ser importados em massa no produto.
 - **Fluxo da TV é autônomo**: countdown de 5s inicia a próxima da fila, resultado fica 8s e volta.
   A TV é "um palco" (sem interação); o controle remoto do anfitrião virá com o dashboard.
 - **Sem auth ainda**: qualquer um cria Jam. Auth entra junto com o dashboard do anfitrião.
-- **"Voz na TV" (protótipo v2, 2026-07-12; latência afinada em 2026-07-15)**: toggle
-  experimental no SingView transmite a voz do cantor para a TV (celular como microfone).
-  v1 usava track Opus do WebRTC — o jitter buffer NetEq do Chrome tem piso de ~40–80ms e
-  o usuário mediu >150ms em hardware real. v2 fura esse piso: **PCM Int16 cru via
-  RTCDataChannel não-confiável/não-ordenado**, playback na TV com **ring buffer próprio**
-  (resampling linear entre taxas; excesso descartado — atraso nunca acumula; underrun
-  reacumula até o alvo). Captura crua no celular, saída WebAudio "interactive" + reverb
-  curto (mascara o residual). Medidor na TV mostra números medidos (buffer real + RTT/2 +
-  saída). Sinalização via Socket.io (mesmos eventos mic_signal). Arquivos:
-  `apps/participant/src/lib/tvMic.ts`, `apps/host/src/lib/micReceiver.ts`.
-  **Tuning de latência (07-15)**, validado pelo usuário em hardware real ("funcionou bem"):
-  pacote de captura reduzido de 3 chunks/8ms para **1 chunk/~2.7ms** (`CHUNKS_PER_PACKET`
-  em tvMic.ts — 1 render quantum, o mínimo possível). Buffer de reprodução **diferenciado
-  por motor**: `WORKLET_BUFFER_MS = 20` (thread de áudio dedicada, aguenta ser agressivo;
-  era 30) vs `SCRIPT_PROCESSOR_BUFFER_MS = 30` (fallback de contexto inseguro — roda na
-  thread principal, mais sujeito a jank; **é o motor que a TV real do usuário usa** via
-  `http://<IP>`, então ficou deliberadamente mais conservador — em 20ms o teste mostrou 1
-  underrun nesse motor). Resultado no teste headless: worklet caiu de mínimo 57ms para
-  **37ms**; ambos os motores com 0 underruns nos parâmetros finais. Teste:
-  `python scripts/test-tv-mic.py` (worklet) e `TV_URL=http://<IP>:3001 python
-  scripts/test-tv-mic.py` (fallback) — **não reproduz jitter de rede real**, só prova que
-  o código não quebra; a validação de crepitar/engasgar de verdade é no ambiente de festa.
-  Se precisar mais folga num motor específico, é só subir a constante correspondente.
-  Fatores fora do código que dominam a latência real: caixa Bluetooth (+100–300ms — usar
-  HDMI/cabo), "modo jogo" da TV (TVs processam áudio, 20–100ms), Wi-Fi 5GHz. Mic dedicado
-  (Fase 4) segue sendo o premium.
+- **"Voz na TV" (v3 — track Opus direto, 2026-07-16, decisão explícita do usuário; ver
+  seção 0 pro relato da troca)**: toggle
+  experimental no SingView transmite a voz do cantor para a TV (celular como microfone),
+  sempre P2P direto na LAN (nunca passa pelo servidor — Socket.io só relaya SDP/ICE;
+  sem STUN/TURN configurado, então o ICE só resolve candidatos "host"; confirmado via
+  `getStats()`/candidate-pair, exposto em `window.__tvmic.candidateType`). Histórico de
+  arquiteturas: v1 = track Opus default (jitter buffer NetEq com piso alto); v2 = PCM
+  Int16 cru via RTCDataChannel com ring buffer próprio na TV (~70ms medidos, commits no
+  git de 2026-07-16 se precisar reverter); **v3 (ATUAL) = track Opus de novo, mas
+  espremido**: `addTransceiver(track, "sendonly")` no celular (o MediaStreamTrack do mic
+  vai direto, sem AudioWorklet no caminho — o AudioContext do celular é só medidor de
+  nível), frames Opus de 10ms via munge da answer da TV (`tuneOpusSdp`: `a=ptime:10`,
+  `minptime=10;stereo=0;usedtx=0;cbr=1` — é a answer que governa o encoder do celular;
+  helper DUPLICADO nos dois arquivos, manter em sincronia), `contentHint="speech"`,
+  `networkPriority:"high"` best effort. Na TV: `receiver.jitterBufferTarget = 0` (+
+  `playoutDelayHint = 0` legado, reaplicados a cada ciclo de ~1s),
+  `AudioContext({ latencyHint: 0 })`, track entra por `MediaStreamAudioSourceNode` no
+  barramento de voz (ganho por cantor + reverb curto + analyser, preservados) + `<audio>`
+  mudo por peer (bug do Chrome: stream remoto só soa no WebAudio se preso a um elemento
+  de mídia). O jitter buffer agora é o NetEq do Chrome (adaptativo sozinho; com target 0
+  ele opera no mínimo que a rede permitir) — não há mais ring buffer/STRETCH/alvo manual.
+  Badge com números medidos: "buffer" = atraso real do NetEq via `getStats()`
+  (`jitterBufferDelay/jitterBufferEmittedCount`, delta por ciclo), "rede" =
+  `SEND_PATH_MS` (20ms estimados: captura + frame 10ms + lookahead ~5ms do Opus) + RTT/2,
+  "saída" = `outputLatency` real. Motor exibido: `opus-track`. `__tvmic` por peer:
+  `packets/bytes/lossPct/concealedPct/jitterBufferMs/rttMs/candidateType` (+
+  `inRms/audioLevel` que o Chrome não popula nesse caminho — ficam 0, não usar de
+  assert). `latencyHint` do celular segue `"interactive"` (hint agressivo troca o perfil
+  de áudio do mic em alguns aparelhos — mais ruído de fundo; lição da v2). No celular o
+  nível de voz da UI vem de AnalyserNode acumulado (~0.5s) — snapshots curtos disparam
+  falso "Sem sinal de voz". Arquivos:
+  `apps/participant/src/lib/tvMic.ts`, `apps/host/src/lib/micReceiver.ts`. **Pendente**:
+  medição de latência em hardware real (a v3 saiu validada só por `test-tv-mic.py` em
+  headless — fiação, pacotes/s e som no mixer; o número final de ms ninguém mediu) e
+  comparação honesta com os ~70ms da v2 — a meta de 15-35ms do usuário é inalcançável no
+  PC dele (só a saída de áudio já é ~48ms, teto de hardware confirmado na v2). Se a v3
+  ficar pior, reverter pro commit da v2 é trivial. Fatores fora do
+  código que dominam a latência residual: caixa Bluetooth (+100–300ms — usar HDMI/cabo),
+  "modo jogo" da TV (20–100ms), Wi-Fi 5GHz vs 2.4GHz. Mic dedicado (Fase 4) segue sendo
+  o premium.
 
 ## 3. O que NÃO foi feito (pendências conhecidas)
 - `apps/admin` (CRUD de catálogo, gestão de licenciamento, monitor de jams) — pasta vazia.
@@ -325,6 +475,17 @@ licença e NÃO devem ser importados em massa no produto.
   UltraStar — falta só a UI; músicas do pipeline IA têm granularidade de linha).
 - Repositório git com remote no GitHub: `https://github.com/Daniel-Oliveiraa/karaoke`
   (privado, criado em 2026-07-15). `main` já rastreia `origin/main`.
+- **Volume do Railway travado em 500MB/~99% cheio (plano trial, sem cartão)** — quebra
+  import do YouTube e o snapshot de Jams em produção. Só resolve com upgrade de
+  plano/cartão no Railway (~$5/mês) ou migração pra outro provedor (Oracle Cloud
+  "Always Free" pesquisado como alternativa viável, mas exige administração manual de
+  VM). **Decisão do usuário pendente** — ver seção 7.
+- Validação em hardware real pendente: "voz na TV" v3 (track Opus — NENHUMA medição de
+  latência em hardware real ainda; comparar com os ~70ms da v2 e reverter se piorar),
+  além do que já valia pra v2: numa Smart TV
+  de verdade e numa rede de festa real (só testado no PC do usuário e com injetor de
+  jitter sintético); `TvScaleFrame` (fix de tela distorcida/cortada) só validado
+  matematicamente via JS no Chrome, não visualmente numa TV real.
 
 ## 4. Design System — regras obrigatórias para qualquer UI nova
 
@@ -340,7 +501,7 @@ Fonte completa: `docs/layoutDesc_extracted.txt`. Tokens em `packages/config/tail
   fixo); Admin = Linear/GitHub/Vercel (denso, tabular).
 - Reaproveitar `@kantai/ui` + preset em qualquer app novo (ver `apps/*/tailwind.config.js`).
 
-## 5. Roadmap (estado em 2026-07-14)
+## 5. Roadmap (estado em 2026-07-16)
 
 - **Fase 0 — Fundações**: parcial. Feito: landing completa, design system, monorepo, git local.
   Pendente: auth, admin. A negociação B2B segue sendo o item de maior lead time.
@@ -365,6 +526,20 @@ Fonte completa: `docs/layoutDesc_extracted.txt`. Tokens em `packages/config/tail
   - Progresso real de import + redesign da LobbyView (07-14): barra de progresso por
     estágio (parsing da saída do pipeline) persistente para quem importou; tela da TV
     redesenhada a partir do esboço do usuário (`docs/jam-layout.png`).
+  - Deploy em produção (07-15/07-16): API no Railway (Docker/GHCR), web/host/participant
+    na Vercel, DNS no Hostinger — tudo no ar (ver seção 7). Bloqueado por volume travado
+    em 500MB no Railway (seção 3).
+  - "Voz na TV" — reescrita de latência v2 (07-16): cabeçalho de pacote com seq/timestamp,
+    suavização contínua de buffer (sem estalo), alvo adaptativo por jitter medido,
+    correção de um bug de medição de latência negativa/absurda. ~100ms → ~70ms estável
+    medido no PC do usuário; pendente validação em Smart TV real e festa real (seção 3).
+  - "Voz na TV" v3 (07-16, mesma data, mais tarde — SUBSTITUI a v2): de volta ao track
+    Opus por decisão explícita do usuário, espremido pra latência mínima (frames 10ms,
+    jitterBufferTarget=0, latencyHint 0 na TV, track direto sem reconstrução). Pendente
+    medição em hardware real e comparação com os ~70ms da v2 (seções 0 e 2).
+  - QR code da Jam também visível durante a música tocando (07-16), não só no lobby.
+  - Fix de tela distorcida/cortada em Smart TV via `TvScaleFrame` (escala uniforme
+    1920x1080, 07-16); pendente validação visual numa TV real (seção 3).
 - **Fase 3 — Monetização**: **adiada a pedido do usuário**.
 - **Fase 4 — Locação de equipamentos**: fora do escopo.
 
@@ -396,18 +571,38 @@ Fonte completa: `docs/layoutDesc_extracted.txt`. Tokens em `packages/config/tail
   (compartilhar o MediaStream); AudioContext criado sem gesto nasce suspenso (retomar em
   clique + avisar na UI — o aviso precisa aparecer MESMO sem conexão de voz ativa); assets
   de dev do Next 16 bloqueiam acesso cross-origin (`allowedDevOrigins`); getUserMedia exige
-  HTTPS fora de localhost; **AudioWorklet só existe em secure context** — TV acessando
-  `http://<IP>` cai no fallback ScriptProcessor do micReceiver (+~21ms; `__tvmic.engine`
-  diz qual motor está ativo); sockets reconectados após restart da API perdem role/sala —
+  HTTPS fora de localhost; **AudioWorklet só existe em secure context** — vale pro pitch
+  detector do participant (sempre https, ok); o receptor da TV v3 NÃO depende mais de
+  worklet (MediaStreamAudioSourceNode funciona em contexto inseguro — o fallback
+  ScriptProcessor da v2 foi removido); stream remoto WebRTC só soa no WebAudio se
+  também estiver preso a um `<audio>` mudo (bug antigo do Chrome, hack mantido no
+  micReceiver); `totalAudioEnergy`/`audioLevel` do inbound-rtp ficam 0 no caminho
+  track→WebAudio (não usar de assert — o sinal real se prova pelo analyser do mixer);
+  sockets reconectados após restart da API perdem role/sala —
   clients refazem attach/rejoin no evento `reconnect`; testes localhost não cobrem
-  contexto inseguro — usar `TV_URL=http://<IP>:3001 python scripts/test-tv-mic.py`.
+  contexto inseguro — usar `TV_URL=http://<IP>:3001 python scripts/test-tv-mic.py`;
+  host dev devolvendo 404 em TODAS as rotas = cache `.next` corrompido (apagar
+  `apps/host/.next` e subir de novo).
 
-## 7. Deploy em produção (2026-07-14 — imagem Docker validada, `railway up` ainda não feito)
+## 7. Deploy em produção (2026-07-16 — no ar, com um bloqueio ativo)
 
-**Arquitetura escolhida**: os 3 apps Next.js (`web`, `host`, `participant`) vão para a
-**Vercel**; a **API** (Socket.io, estado em memória + processos Python) vai para o
-**Railway** — Vercel é serverless (sem conexão persistente/WebSocket, sem disco local
-persistente, sem `child_process` de Python), incompatível com a arquitetura atual da API.
+**Arquitetura**: os 3 apps Next.js (`web`, `host`, `participant`) estão na **Vercel**; a
+**API** (Socket.io, estado em memória + processos Python) está no **Railway** — Vercel é
+serverless (sem conexão persistente/WebSocket, sem disco local persistente, sem
+`child_process` de Python), incompatível com a arquitetura atual da API.
+
+**Estado ao vivo**:
+- **API** → Railway, projeto `elegant-vitality`, serviço `disciplined-laughter` (nomes
+  aleatórios do Railway, não renomeados). URL pública: `https://api.kantai.online`.
+- **Host** (`apps/host`) → Vercel, projeto `karaoke-host`. **Decisão do usuário (fase de
+  testes)**: o domínio raiz `kantai.online` aponta pro HOST, não pro site institucional —
+  abre direto em "Abrir uma Jam nesta tela" (mudar isso é decisão futura de lançamento).
+- **Participant** (`apps/participant`) → Vercel, projeto `karaoke-participant`, URL
+  `https://karaoke-participant.vercel.app` (sem domínio custom ainda).
+- **Web** (`apps/web`, site institucional) → projeto `karaoke-web` existe na Vercel mas
+  **sem domínio custom** (só a URL `*.vercel.app` gerada) — fica assim enquanto
+  `kantai.online` apontar pro host, por decisão do usuário.
+- DNS em `kantai.online` gerenciado no Hostinger (hpanel.hostinger.com).
 
 **Decisões do usuário (2026-07-15)**:
 - Catálogo publicado = **o inteiro atual** (~380 músicas, a maioria do lote pessoal do
@@ -416,75 +611,81 @@ persistente, sem `child_process` de Python), incompatível com a arquitetura atu
 - Importação ao vivo do YouTube (`catalog:import_youtube`) **continua ativa em produção**
   — qualquer participante conectado pode disparar um download+Demucs pelo servidor
   publicado. Risco aceito: abuso/custo de quem descobrir a URL, e a violação de ToS do
-  YouTube fica exposta publicamente (usava ser só o ambiente local do usuário). Sem
-  mitigação implementada ainda (ex.: rate-limit por participante) — considerar se virar
-  problema real.
+  YouTube fica exposta publicamente. Sem mitigação implementada ainda (ex.: rate-limit
+  por participante) — considerar se virar problema real.
 
 ### Vercel — web/host/participant
 Um projeto Vercel por app, todos apontando pro mesmo repo (`Daniel-Oliveiraa/karaoke`),
-com **Root Directory** diferente:
-| App | Root Directory | Domínio sugerido | Env vars |
+com **Root Directory** diferente e **auto-deploy em cada push pra `main`** (só o(s)
+projeto(s) cujos arquivos mudaram ganham novo deploy):
+| App | Root Directory | Domínio | Env vars |
 |---|---|---|---|
-| `apps/web` | `apps/web` | `kantai.online` | nenhuma (site institucional, sem socket) |
-| `apps/host` | `apps/host` | `tv.kantai.online` (sugestão) | `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_PARTICIPANT_URL` |
-| `apps/participant` | `apps/participant` | `app.kantai.online` (sugestão) | `NEXT_PUBLIC_API_URL` |
+| `apps/web` | `apps/web` | nenhum (só `*.vercel.app`) | nenhuma |
+| `apps/host` | `apps/host` | `kantai.online` (raiz) | `NEXT_PUBLIC_API_URL=https://api.kantai.online`, `NEXT_PUBLIC_PARTICIPANT_URL` |
+| `apps/participant` | `apps/participant` | nenhum (só `*.vercel.app`) | `NEXT_PUBLIC_API_URL=https://api.kantai.online` |
 
-`NEXT_PUBLIC_API_URL`/`NEXT_PUBLIC_PARTICIPANT_URL` apontam para as URLs públicas reais
-(a da API no Railway, e a do participant na própria Vercel) — nada de IP de rede local.
+`NEXT_PUBLIC_*` apontam pras URLs públicas reais — nada de IP de rede local em produção.
 Vercel detecta o workspace npm automaticamente (instala na raiz do monorepo mesmo com
-Root Directory numa subpasta). **Bônus**: HTTPS de verdade emitido automaticamente —
-acaba com toda a fricção do certificado self-signed local (accept manual no celular) uma
-vez em produção.
+Root Directory numa subpasta). HTTPS de verdade emitido automaticamente — sem fricção de
+certificado self-signed em produção (isso só existe no fluxo de dev local, seção 2).
 
 ### Railway — API (`apps/api`)
-**Por que via `railway up` (CLI, upload direto) em vez de GitHub**: `apps/api/media/`
-(catálogo processado, ~2.1GB) e `apps/api/data/` (snapshot das Jams) estão no
-`.gitignore` — nunca foram enviados ao GitHub. Um deploy via GitHub chegaria com o
-catálogo vazio. `railway up` sobe o diretório local (respeitando só o `.dockerignore`,
-não o `.gitignore`), então esses arquivos vão junto.
-
-**Arquivos preparados**: `Dockerfile` (raiz do repo) + `docker/api-entrypoint.sh` +
-`.dockerignore`. A imagem tem Node 20 + Python3 + ffmpeg (para o Demucs/yt-dlp da
-importação ao vivo). O catálogo/estado atuais são copiados para `/app/seed/` na
-imagem (fora do caminho onde o volume persistente vai montar) — o entrypoint copia
-essa semente para `/data/media` e `/data/state` **só na primeira execução** (volume
-vazio); depois disso o volume já tem dados e novas músicas importadas ao vivo (ou
-mudanças no estado das Jams) sobrevivem a redeploys sem serem sobrescritas.
-
-Variáveis de ambiente lidas pelo código (já implementadas — sem elas, cai nos caminhos
-locais de sempre, então dev local continua funcionando igual):
-- `KANTAI_MEDIA_DIR` (catálogo — `catalog.ts`)
-- `KANTAI_DATA_DIR` (snapshot de Jams + playcounts — `store.ts`/`playcounts.ts`)
-- `PORT` (Railway injeta sozinho; o código já respeita `process.env.PORT`)
-- `HTTP_PORT=0` (desativa o espelho HTTP puro — só existia pra TV sem cert self-signed
-  em dev local; o Railway já entrega HTTPS de verdade, então essa muleta não é
-  necessária em produção)
-- `PYTHON_BIN` (default `"python"` — o Dockerfile já cria o symlink `python→python3`)
-
-**Passos no Railway** (dashboard): criar o serviço a partir do Dockerfile, anexar um
-**volume persistente montado em `/data`**, configurar as env vars acima, e adicionar
-domínio customizado (ex.: `api.kantai.online`) apontando pro serviço.
-
-**Deploy** (CLI, do diretório raiz do repo):
+**Não use `railway up`** — o binário Windows do CLI quebra com panic Rust
+(`buf.len() <= u32::MAX as usize`) ao empacotar os ~2.1GB de `apps/api/media` com
+`--no-gitignore` (necessário porque `media/`/`data/` são gitignored e o deploy via
+GitHub chegaria com catálogo vazio). **Fluxo real, validado e é o que deve ser repetido
+a cada mudança em `apps/api`**:
 ```bash
-npx @railway/cli login          # abre o navegador pra autenticar
-npx @railway/cli link           # conecta ao projeto criado no dashboard
-npx @railway/cli up             # sobe o diretório local (inclui media/data)
+docker build -t kantai-api -f Dockerfile .
+docker tag kantai-api ghcr.io/daniel-oliveiraa/kantai-api:latest
+docker push ghcr.io/daniel-oliveiraa/kantai-api:latest
 ```
-**Build local validado (2026-07-14)**: `docker build -t kantai-api-test -f Dockerfile .`
-passou completo (contexto de 2.79GB, imagem final ~8.3GB — Node+Python+torch CPU+Demucs+
-catálogo). Corrigido no meio do caminho: sem o `pip3 install torch --index-url .../cpu`
-antes do `requirements.txt`, o resolver do pip puxava a build CUDA/GPU de torch (centenas
-de MB de `cuda-toolkit`/`nvidia-cudnn` inúteis num host CPU-only como o Railway) — com a
-ordem corrigida, o segundo build não baixou nenhum pacote CUDA. Smoke test rodando o
-container localmente (`docker run -p 4099:4001 -e PORT=4001 kantai-api-test`) confirmou:
-entrypoint semeia `/data/media` e `/data/state` a partir de `/app/seed/` na primeira
-execução, API sobe, catálogo carrega (381 músicas), `GET /health` responde `{"ok":true}`.
-**Nota**: a semente também inclui as Jams salvas em `apps/api/data/jams.json` do ambiente
-local (`store.ts` restaurou 40 no smoke test) — como são jams de teste/dev, o primeiro
-boot em produção provavelmente vai "restaurar" sessões antigas irrelevantes; elas somem
-sozinhas (jams >24h são descartadas no boot) mas para um primeiro deploy limpo, considerar
-esvaziar `apps/api/data/jams.json` (ou renomear) antes do `railway up` inicial.
+depois, no dashboard do Railway: Settings → Source → "Connect Image" (já configurado
+apontando pra essa tag) → botão **"Redeploy" manual** (não há auto-deploy; o Railway não
+observa o registry, só faz pull de novo quando mandado). Requer login Docker no GHCR
+(`docker login ghcr.io`, token/PAT do GitHub) antes do primeiro push.
 
-Próximo passo é interativo (requer login/dashboard do usuário): `railway login` →
-`railway link` (projeto criado no dashboard, com volume `/data` já anexado) → `railway up`.
+**Armadilha real que já mordeu**: o pacote GHCR (`ghcr.io/daniel-oliveiraa/kantai-api`)
+precisa estar **público** — se privado, Railway falha com "unable to connect to the
+registry" (não configuramos credencial de registry nenhuma no Railway). Mudar
+visibilidade é uma ação de controle de acesso — pedir pro usuário fazer no GitHub
+(Packages → kantai-api → Package settings → Change visibility), não fazer por conta
+própria.
+
+**Arquivos**: `Dockerfile` (raiz do repo) + `docker/api-entrypoint.sh` + `.dockerignore`.
+Node 20 + Python3 + ffmpeg (Demucs/yt-dlp da importação ao vivo). Catálogo/estado atuais
+são copiados pra `/app/seed/` na imagem (fora do path onde o volume monta) — o
+entrypoint copia essa semente pra `/data/media` e `/data/state` **só na primeira
+execução** (volume vazio); depois disso o volume já tem dados e sobrevive a redeploys.
+
+Variáveis de ambiente lidas pelo código (sem elas, cai nos caminhos locais de sempre —
+dev local não é afetado):
+- `KANTAI_MEDIA_DIR` (catálogo — `catalog.ts`), `KANTAI_DATA_DIR` (snapshot de Jams +
+  playcounts — `store.ts`/`playcounts.ts`) — ambos setados pro Railway apontar pro
+  volume em `/data`.
+- `PORT` (Railway injeta sozinho; código já respeita `process.env.PORT`).
+- `HTTP_PORT=0` (desativa o espelho HTTP puro de dev local — Railway já entrega HTTPS
+  de verdade, então essa muleta não é necessária em produção).
+- `PYTHON_BIN` (default `"python"` — o Dockerfile já cria o symlink `python→python3`).
+
+**⚠️ BLOQUEIO ATIVO — precisa de decisão/ação do usuário**: o volume persistente
+(`disciplined-laughter-volume`, montado em `/data`) está **travado em 500MB pelo plano
+trial (sem cartão) e em ~99% cheio**. Isso quebra a importação do YouTube em produção
+(`ENOSPC`, Demucs morre com SIGKILL) e às vezes o salvamento do snapshot de Jams
+(`[store] falha ao salvar snapshot: Error: ENOSPC`). O dashboard mostra um botão
+"Upgrade to get 5 GB" — **"Live Resize" sem fazer upgrade NÃO funciona** (testado 3x,
+volta pro mesmo tamanho). Catálogo ficou parcialmente semeado (~79 de ~380 músicas com
+áudio real completo). Duas saídas, nenhuma feita ainda:
+1. Pagar o upgrade do Railway (~$5/mês) — caminho mais simples, zero migração.
+2. Migrar pra Oracle Cloud "Always Free" (pesquisado nesta sessão): 200GB de block
+   storage + VM real com root, 2 OCPU/12GB RAM ARM Ampere, genuinamente grátis pra
+   sempre — mas exige administrar a VM na mão (sem deploy tipo git push; HTTPS/
+   firewall/systemd manuais). Fly.io não é mais grátis pra conta nova; Render não tem
+   disco persistente no tier grátis e hiberna; Koyeb não tem mais tier grátis de
+   compute geral — nenhum desses é uma alternativa viável.
+
+**Build local**: `docker build -t kantai-api-test -f Dockerfile .` (contexto ~2.79GB,
+imagem final ~8.3GB — Node+Python+torch CPU+Demucs+catálogo). Importante: o
+`requirements.txt` precisa do `pip3 install torch --index-url .../cpu` **antes** dele,
+senão o resolver do pip puxa a build CUDA/GPU de torch (centenas de MB de
+`cuda-toolkit`/`nvidia-cudnn` inúteis num host CPU-only como o Railway).

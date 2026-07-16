@@ -4,103 +4,82 @@ import type { MicSignalData } from "@kantai/shared-types";
 import { getSocket } from "./socket";
 
 /**
- * "Voz na TV" v2 — latência mínima.
+ * "Voz na TV" v3 — track Opus direto, afinado pra latência mínima.
  *
- * Em vez de um track de áudio WebRTC (Opus + jitter buffer NetEq do Chrome,
- * piso de ~40–80ms que não controlamos), enviamos PCM cru (Int16) por um
- * RTCDataChannel não-confiável e não-ordenado. Na LAN a banda sobra
- * (bem abaixo de 1Mbps mesmo com pacotes pequenos) e o buffer de
- * reprodução passa a ser nosso (ver TARGET_BUFFER_MS no micReceiver da TV).
+ * Histórico: a v1 usava um track Opus com as configurações default do
+ * Chrome (jitter buffer NetEq com piso alto); a v2 trocou por PCM cru via
+ * RTCDataChannel com ring buffer próprio na TV. Em 2026-07-16, por decisão
+ * explícita do usuário, voltamos ao track Opus — mas agora espremendo cada
+ * fonte de atraso que a v1 não tocava:
  *
- * Pacotes de 1 render quantum (128 amostras ≈ 2.7ms @48kHz — o mínimo que
- * o AudioWorklet entrega por vez, não dá pra empacotar menor). Perda de
- * pacote = ~2.7ms de silêncio, imperceptível numa festa; atraso acumulado
- * nunca cresce porque pacotes atrasados são simplesmente descartados
- * (maxRetransmits: 0). Pacotes menores = mais overhead de rede, irrelevante
- * na LAN, mas reduz a espera de empacotamento no celular (era 8ms c/ 3
- * chunks; ver CAPTURE_MS no micReceiver da TV).
+ * - O celular NÃO reconstrói o stream: o MediaStreamTrack do microfone vai
+ *   direto pro RTCPeerConnection (`addTransceiver(track, "sendonly")`).
+ *   O AudioContext daqui embaixo existe SÓ pro medidor de nível da UI —
+ *   o áudio enviado não passa por ele.
+ * - Frames Opus de 10ms em vez dos 20ms default (`a=ptime:10` + fmtp na
+ *   answer da TV, ver tuneOpusSdp) — corta ~10ms de espera de empacotamento.
+ *   O algoritmo do Opus em si adiciona ~5ms de lookahead, inevitável.
+ * - Mono, DTX desligado (transição de conforto/ruído atrasa o ataque da
+ *   voz), CBR (bitrate constante = pacing constante, menos jitter próprio).
+ * - Do lado da TV (micReceiver.ts): `receiver.jitterBufferTarget = 0`
+ *   (pede ao NetEq o menor buffer que ele aceitar) e playback via WebAudio
+ *   com `latencyHint: 0`, mantendo o barramento de voz (ganho + reverb).
  *
- * Cada pacote leva um cabeçalho de 8 bytes (seq uint32 + captureTimeUs
- * uint32, ambos via DataView — ToUint32 já faz o wrap sozinho) antes do
- * PCM: dá pro receptor (micReceiver.ts) medir perda/reordenamento reais
- * e a latência celular→TV de verdade, em vez de só inferir pelo RTT da
- * conexão inteira. ~3% de overhead num pacote de 256 bytes, irrelevante
- * na LAN (mesmo raciocínio de banda do parágrafo acima).
+ * Sempre P2P direto na LAN (sem STUN/TURN — só candidatos "host");
+ * Socket.io só relaya SDP/ICE.
  */
 export interface TvMicSession {
   stop: () => void;
 }
 
-const CHUNKS_PER_PACKET = 1; // 128 amostras = ~2.7ms @48kHz (1 render quantum)
-const MAX_BUFFERED_BYTES = 32 * 1024; // descarta se o canal congestionar
-
 /**
- * Injetor de jitter sintético, só pra teste (scripts/test-tv-mic.py) — a
- * LAN de verdade não tem jitter perceptível, então validar a suavização do
- * buffer (STRETCH_K/MAX_STRETCH no micReceiver.ts) exige jitter simulado.
- * Ligado via `localStorage.setItem("kantai-debug-jitter-ms", "30")` no
- * celular ANTES de "Liberar microfone e cantar" (não precisa reiniciar o
- * dev server, já que o teste conecta em servidores já rodando). Cada
- * pacote leva um atraso aleatório de 0..N ms (o próprio atraso variável já
- * produz reordenamento — pacotes com atraso menor podem ultrapassar os
- * enviados antes com atraso maior) + ~2% de perda simulada. Nunca ativado
- * em uso normal (a chave só existe se alguém escrever nela manualmente).
+ * Ajusta a seção de áudio do SDP pra latência mínima do encoder Opus.
+ * DUPLICADO em apps/host/src/lib/micReceiver.ts (não há pacote compartilhado
+ * de runtime entre os apps) — manter os dois em sincronia.
+ *
+ * O que importa de verdade é a TV aplicar isso na ANSWER: o encoder do
+ * remetente obedece ao fmtp/ptime da descrição REMOTA que ele recebe.
+ * Aplicar também na offer daqui é inócuo (a TV não envia áudio) mas mantém
+ * os dois lados simétricos.
  */
-function readDebugJitterMs(): number {
-  if (typeof window === "undefined") return 0;
-  const raw = window.localStorage.getItem("kantai-debug-jitter-ms");
-  const n = raw ? Number(raw) : 0;
-  return Number.isFinite(n) && n > 0 ? n : 0;
-}
-
-const SENDER_WORKLET = `
-class PcmSender extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.chunks = [];
-    this.sumSq = 0;
-    this.nSamples = 0;
-    this.lastLevel = 0;
-    this.seq = 0;
-  }
-  process(inputs) {
-    const ch = inputs[0] && inputs[0][0];
-    if (!ch) return true;
-    this.chunks.push(ch.slice(0));
-    for (let i = 0; i < ch.length; i++) this.sumSq += ch[i] * ch[i];
-    this.nSamples += ch.length;
-    if (this.chunks.length >= ${CHUNKS_PER_PACKET}) {
-      const n = this.chunks.reduce((s, c) => s + c.length, 0);
-      const buf = new ArrayBuffer(8 + n * 2);
-      const view = new DataView(buf);
-      view.setUint32(0, this.seq++);
-      view.setUint32(4, Math.floor(currentTime * 1e6));
-      const out = new Int16Array(buf, 8);
-      let o = 0;
-      for (const c of this.chunks) {
-        for (let i = 0; i < c.length; i++) {
-          const v = Math.max(-1, Math.min(1, c[i]));
-          out[o++] = v < 0 ? v * 0x8000 : v * 0x7fff;
-        }
-      }
-      this.port.postMessage(buf, [buf]);
-      this.chunks = [];
+export function tuneOpusSdp(sdp: string): string {
+  const rtpmap = sdp.match(/a=rtpmap:(\d+) opus\/48000/i);
+  if (!rtpmap) return sdp;
+  const pt = rtpmap[1];
+  const overrides: Record<string, string> = {
+    minptime: "10", // frames de 10ms (default do Chrome é 20ms)
+    stereo: "0",
+    "sprop-stereo": "0",
+    usedtx: "0", // DTX off: sem transição silêncio→voz atrasando o ataque
+    cbr: "1", // pacing constante = menos jitter gerado pelo próprio encoder
+  };
+  const lines = sdp.split("\r\n");
+  const out: string[] = [];
+  for (const line of lines) {
+    // remove ptime/maxptime pré-existentes pra não duplicar
+    if (line.startsWith("a=ptime:") || line.startsWith("a=maxptime:")) continue;
+    if (line.startsWith(`a=fmtp:${pt} `)) {
+      const kv = new Map<string, string | undefined>(
+        line
+          .slice(`a=fmtp:${pt} `.length)
+          .split(";")
+          .map((p) => {
+            const [k, v] = p.split("=");
+            return [k!.trim(), v] as [string, string | undefined];
+          })
+      );
+      for (const [k, v] of Object.entries(overrides)) kv.set(k, v);
+      out.push(
+        `a=fmtp:${pt} ` +
+          [...kv].map(([k, v]) => (v === undefined ? k : `${k}=${v}`)).join(";")
+      );
+      out.push("a=ptime:10");
+      continue;
     }
-    // nível de voz a cada ~0.5s — a UI usa para detectar captura muda
-    if (currentTime - this.lastLevel > 0.5 && this.nSamples > 0) {
-      this.lastLevel = currentTime;
-      this.port.postMessage({
-        type: "level",
-        rms: Math.sqrt(this.sumSq / this.nSamples),
-      });
-      this.sumSq = 0;
-      this.nSamples = 0;
-    }
-    return true;
+    out.push(line);
   }
+  return out.join("\r\n");
 }
-registerProcessor("kantai-pcm-sender", PcmSender);
-`;
 
 export async function startTvMic(
   myParticipantId: string,
@@ -129,62 +108,63 @@ export async function startTvMic(
       },
     }));
 
-  // "interactive" (não um número menor): testado e revertido — pedir um
-  // buffer de captura mais agressivo não reduziu latência nenhuma (o
-  // sistema operacional já limita ao que o hardware aguenta) e teve um
-  // efeito colateral real: em alguns aparelhos isso troca o mic de um
-  // perfil "comunicação" (que costuma ter supressão de ruído própria do
-  // SO, por baixo das constraints do getUserMedia abaixo) pra um perfil
-  // "cru", captando mais ruído de fundo. Não repetir esse experimento
-  // sem validar direito o trade-off.
-  const ctx = new AudioContext({ latencyHint: "interactive" });
-  if (ctx.state === "suspended") await ctx.resume();
-  await ctx.audioWorklet.addModule(
-    URL.createObjectURL(new Blob([SENDER_WORKLET], { type: "application/javascript" }))
-  );
-
-  const pc = new RTCPeerConnection();
-  const dc = pc.createDataChannel("voice", {
-    ordered: false,
-    maxRetransmits: 0,
-  });
-
-  const source = ctx.createMediaStreamSource(stream);
-  const sender = new AudioWorkletNode(ctx, "kantai-pcm-sender", {
-    numberOfInputs: 1,
-    numberOfOutputs: 0,
-  });
-  source.connect(sender);
-
-  const debugJitterMs = readDebugJitterMs();
-  function sendPacket(buf: ArrayBuffer) {
-    if (debugJitterMs <= 0) {
-      if (dc.readyState === "open" && dc.bufferedAmount < MAX_BUFFERED_BYTES) {
-        dc.send(buf);
-      }
-      return;
-    }
-    if (Math.random() < 0.02) return; // ~2% de perda simulada
-    setTimeout(() => {
-      if (dc.readyState === "open" && dc.bufferedAmount < MAX_BUFFERED_BYTES) {
-        dc.send(buf);
-      }
-    }, Math.random() * debugJitterMs);
+  const track = stream.getAudioTracks()[0];
+  if (!track) throw new Error("stream de microfone sem track de áudio");
+  try {
+    track.contentHint = "speech";
+  } catch {
+    // contentHint é opcional — navegador antigo só ignora
   }
 
-  dc.onopen = () => {
-    // header: taxa de amostragem do celular (a TV faz o resampling)
-    dc.send(JSON.stringify({ type: "config", sampleRate: ctx.sampleRate }));
-    sender.port.onmessage = (
-      e: MessageEvent<ArrayBuffer | { type: "level"; rms: number }>
-    ) => {
-      if (e.data instanceof ArrayBuffer) {
-        sendPacket(e.data);
-      } else if (e.data?.type === "level") {
-        options?.onLevel?.(e.data.rms);
-      }
-    };
-  };
+  const pc = new RTCPeerConnection();
+  const transceiver = pc.addTransceiver(track, {
+    direction: "sendonly",
+    streams: [stream],
+  });
+  // prioridade de rede alta (DSCP) onde o navegador suportar — best effort
+  try {
+    const params = transceiver.sender.getParameters();
+    for (const enc of params.encodings ?? []) {
+      (enc as { priority?: string; networkPriority?: string }).priority = "high";
+      (enc as { priority?: string; networkPriority?: string }).networkPriority =
+        "high";
+    }
+    await transceiver.sender.setParameters(params);
+  } catch {
+    // setParameters com networkPriority não é universal — sem ele funciona igual
+  }
+
+  // Medidor de nível pra UI (detecção de captura muda) — o envio de áudio
+  // NÃO passa por este AudioContext (o WebRTC captura o track direto), então
+  // o latencyHint daqui não afeta a latência da voz. "interactive" mantido
+  // pelo efeito colateral já documentado: hints agressivos trocam o perfil
+  // de áudio do mic em alguns aparelhos (mais ruído de fundo).
+  const ctx = new AudioContext({ latencyHint: "interactive" });
+  if (ctx.state === "suspended") await ctx.resume();
+  const source = ctx.createMediaStreamSource(stream);
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 2048;
+  source.connect(analyser);
+
+  // cada snapshot do analyser cobre só ~43ms — acumula vários e reporta a
+  // média a cada ~0.5s, senão um vale entre palavras dispara falso
+  // "Sem sinal de voz" na UI
+  const snapshot = new Float32Array(analyser.fftSize);
+  let sumSq = 0;
+  let nSamples = 0;
+  let lastReport = performance.now();
+  const levelTimer = setInterval(() => {
+    analyser.getFloatTimeDomainData(snapshot);
+    for (let i = 0; i < snapshot.length; i++) sumSq += snapshot[i]! * snapshot[i]!;
+    nSamples += snapshot.length;
+    const now = performance.now();
+    if (now - lastReport >= 500 && nSamples > 0) {
+      lastReport = now;
+      options?.onLevel?.(Math.sqrt(sumSq / nSamples));
+      sumSq = 0;
+      nSamples = 0;
+    }
+  }, 100);
 
   pc.onicecandidate = (e) => {
     if (e.candidate) {
@@ -220,22 +200,21 @@ export async function startTvMic(
   socket.on("jam:mic_signal", onSignal);
 
   const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
+  const tunedSdp = tuneOpusSdp(offer.sdp ?? "");
+  await pc.setLocalDescription({ type: "offer", sdp: tunedSdp });
   socket.emit("participant:mic_signal", {
-    description: { type: "offer", sdp: offer.sdp ?? "" },
+    description: { type: "offer", sdp: tunedSdp },
   });
 
   return {
     stop: () => {
       socket.off("jam:mic_signal", onSignal);
-      sender.port.onmessage = null;
+      clearInterval(levelTimer);
       source.disconnect();
-      sender.disconnect();
-      dc.close();
       pc.close();
       // stream compartilhado pertence à detecção de pitch — não parar aqui
       if (ownsStream) {
-        for (const track of stream.getTracks()) track.stop();
+        for (const t of stream.getTracks()) t.stop();
       }
       void ctx.close();
     },
