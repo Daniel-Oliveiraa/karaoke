@@ -254,15 +254,40 @@
   "part./feat./ft./,/&//", `primary_artist()`) quando o artista completo não
   encontra nada. Rodada uma passada completa (`fix_lyrics.py`, sem
   `--force`) sobre o catálogo inteiro (364 músicas) pra revalidar com a
-  busca corrigida: **resultado medido — ok=8 letras novas encontradas
-  (Cobertor + 8), pulados=276 (já tinham LRCLIB de antes ou são
+  busca corrigida: **resultado medido — ok=8 (1 duplicada por uma corrida
+  entre duas execuções acidentalmente simultâneas dessa rodada — 7 músicas
+  novas nessa passada), pulados=276 (já tinham LRCLIB de antes ou são
   UltraStar/isentas), sem_match=80 (não existe letra sincronizada pra essas
   na LRCLIB — provavelmente lives/DVDs/covers/remixes obscuros; continuam
   no Whisper, é o limite real da base comunitária, não um bug)**. Ou seja: o
   bug de matching por "part./feat." era real mas afetava um subconjunto
   pequeno do catálogo, não a maioria — a maior parte das letras ruins
   restantes (os 80 `sem_match`) não tem solução automática disponível hoje.
-  254 músicas têm letra sincronizada da LRCLIB no total agora.
+  254 músicas têm letra sincronizada da LRCLIB no total agora. As 8 músicas
+  que se beneficiaram da correção (Cobertor + 7): `anitta-part-projota-
+  cobertor`, `anitta-part-cone-crew-sim`, `anitta-part-jhama-essa-mina-e-
+  louca`, `anitta-part-vitin-cravo-e-canela`, `shawn-mendes-stitches`,
+  `scalene-danse-macabre-clipe-real-surreal`, `vanguart-meu-sol-
+  videoclipe-oficial`, `ivete-sangalo-alexandre-carlo-could-you-be-loved-
+  citacao-mus`.
+  **Pegadinha descoberta no primeiro redeploy (2026-07-17)**: corrigir o
+  JSON local não bastou — essas 8 músicas já estavam semeadas no volume do
+  Railway de antes (mesmo problema do Josh Woodward, seção acima, mas pra
+  um arquivo MODIFICADO em vez de removido: o entrypoint só semeia quando o
+  volume está vazio, nunca sobrescreve o que já existe). Depois do 1º
+  redeploy pós-fix, `/catalog` em produção ainda devolvia a letra velha do
+  Whisper pra Cobertor. Corrigido com o mesmo padrão do
+  `removeDeprecatedSongs`: `catalog.ts` ganhou `refreshFixedSongsFromSeed()`
+  — lê `/app/seed/media/<id>.json` (a semente da imagem Docker, sempre
+  presente no container independente do estado do volume — só não existe
+  em dev local, onde a função é no-op) e sobrescreve o arquivo
+  correspondente no volume, pros 8 ids acima, todo boot. Roda ANTES do
+  catálogo carregar, então já vale no mesmo boot. Log de confirmação:
+  `[catalog] re-sincronizado(s) N arquivo(s) a partir da semente da
+  imagem`. **Lição pra próxima correção de dado já semeado**: um redeploy
+  de imagem NÃO propaga mudança de conteúdo pro volume sozinho — sempre vai
+  precisar de uma entrada na lista de refresh (ou remoção) em `catalog.ts`,
+  não só corrigir o arquivo local.
 
 - **Pesquisa feita (não implementada)**: alternativas gratuitas ao Railway
   com mais armazenamento, pro caso do usuário não querer pagar o upgrade.

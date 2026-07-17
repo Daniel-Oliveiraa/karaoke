@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Song } from "@kantai/shared-types";
@@ -65,8 +65,50 @@ function removeDeprecatedSongs(): void {
   }
 }
 
+/**
+ * Semente original da imagem Docker (ver docker/api-entrypoint.sh) — só
+ * existe dentro do container, não no dev local. O entrypoint só copia
+ * semente → volume quando o volume está VAZIO; então quando um arquivo já
+ * existente no volume é corrigido (não removido) na imagem — ex.: letra
+ * de uma música corrigida em 2026-07-16 — o redeploy sozinho não propaga a
+ * correção pro volume. Esta lista força a re-sincronização desses ids
+ * específicos a partir da semente, todo boot (idempotente — sobrescreve
+ * sempre com o mesmo conteúdo da imagem atual). Pode ser esvaziada quando
+ * não houver mais correções pendentes de propagar.
+ */
+const SEED_MEDIA_DIR = "/app/seed/media";
+const REFRESH_FROM_SEED_IDS = [
+  "anitta-part-projota-cobertor",
+  "anitta-part-cone-crew-sim",
+  "anitta-part-jhama-essa-mina-e-louca",
+  "anitta-part-vitin-cravo-e-canela",
+  "shawn-mendes-stitches",
+  "scalene-danse-macabre-clipe-real-surreal",
+  "vanguart-meu-sol-videoclipe-oficial",
+  "ivete-sangalo-alexandre-carlo-could-you-be-loved-citacao-mus",
+];
+
+function refreshFixedSongsFromSeed(): void {
+  if (!existsSync(SEED_MEDIA_DIR)) return; // dev local: sem semente, nada a fazer
+  let refreshed = 0;
+  for (const id of REFRESH_FROM_SEED_IDS) {
+    try {
+      const content = readFileSync(join(SEED_MEDIA_DIR, `${id}.json`), "utf-8");
+      writeFileSync(join(MEDIA_DIR, `${id}.json`), content);
+      refreshed++;
+    } catch {
+      // sem essa música na semente atual (nunca existiu, ou já foi
+      // removida por removeDeprecatedSongs) — ok
+    }
+  }
+  if (refreshed > 0) {
+    console.log(`[catalog] re-sincronizado(s) ${refreshed} arquivo(s) a partir da semente da imagem`);
+  }
+}
+
 function loadProcessedSongs(): Song[] {
   removeDeprecatedSongs();
+  refreshFixedSongsFromSeed();
   let entries: string[];
   try {
     entries = readdirSync(MEDIA_DIR);
